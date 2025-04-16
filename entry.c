@@ -1,7 +1,5 @@
 #include "IA32.h"
 
-
-
 VOID driverUnload(PDRIVER_OBJECT driverObject)
 {
 	UNREFERENCED_PARAMETER(driverObject);
