@@ -165,6 +165,90 @@ typedef enum _HOST_STATE_AREA_FIELDS
 	HOST_SHADOW_STACK_POINTER_REGISTER_SSP			= 0x6C1A
 }HOST_STATE_AREA_FIELDS;
 
+typedef enum _VM_EXECUTION_CONTROL_FIELDS
+{
+	/*Pin-Based VM-Execution Controls*/
+	PIN_BASED_VM_EXECUTION_CONTROL										= 0x4000, //32
+	/*Processor-Based VM-Execution Controls*/
+	PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS						= 0x4002, //32
+	SECONDARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS						= 0x401E, //32
+	TERTIARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS						= 0x2034, //64
+	/*Exception Bitmap*/
+	EXCEPTION_BITMAP													= 0x4004, //32
+	/*I/O-Bitmap Addresses*/
+	IO_BITMAP_A															= 0x2000, //64
+	IO_BITMAP_B															= 0x2002, //64
+	/*Time-Stamp Counter Offset and Multiplier*/
+	TSC_OFFSET															= 0x2010, //64
+	TSC_MULTIPLIER														= 0x2032, //64
+	/*Guest/Host Masks and Read Shadows for CR0 and CR4*/
+	CR0_GUEST_HOST_MARK													= 0x6000, //64
+	CR4_GUEST_HOST_MARK													= 0x6002, //64
+	CR0_READ_SHADOW														= 0x6004, //64
+	CR4_READ_SHADOW														= 0x6006, //64
+	/*CR3-Target Controls*/
+	CR3_TARGET_VALUE0													= 0x6008, //64
+	CR3_TARGET_VALUE1													= 0x600A, //64
+	CR3_TARGET_VALUE2													= 0x600C, //64
+	CR3_TARGET_VALUE3													= 0x600E, //64
+	CR3_TARGET_COUNT													= 0x400A, //32
+	/*Controls for APIC Virtualization*/
+	APIC_ACCESS_ADDRESS													= 0x2014, //64
+	VIRTUAL_APIC_ADDRESS												= 0x2012, //64
+	TPR_THRESHOLD														= 0x401C, //32
+	EOI_EXIT_BITMAP_0													= 0x201C, //64
+	EOI_EXIT_BITMAP_1													= 0x201E, //64
+	EOI_EXIT_BITMAP_2													= 0x2020, //64
+	EOI_EXIT_BITMAP_3													= 0x2022, //64
+	POSTED_INTERRUPT_NOTIFICATION_VECTOR								= 0x0002, //16
+	POSTED_INTERRUPT_DESCRIPTOR_ADDRESS									= 0x2016, //64
+	PID_POINTER_TABLE_ADDRESS											= 0x2042, //64
+	LAST_PID_POINTER_INDEX												= 0x0008, //16
+	/*MSR-Bitmap Address*/
+	MSR_BITMAPS															= 0x2004, //64
+	/*Executive-VMCS Pointer*/
+	EXECUTIVE_VMCS_POINTER												= 0x200C, //64
+	/*Extended-Page-Table Pointer (EPTP)*/
+	EXTENDED_PAGE_TABLE_POINTER											= 0x201A, //64
+	/*Virtual-Processor Identifier (VPID)*/
+	VIRTUAL_PROCESSOR_IDENTIFIER										= 0x0000, //16
+	/*Controls for PAUSE-Loop Exiting*/
+	PLE_GAP																= 0x4020, //32
+	PLE_WINDOW															= 0x4022, //32
+	/*VM-Function Controls*/
+	VM_FUNCTION_CONTROLS												= 0x2018, //64
+	EPTP_LIST_ADDRESS													= 0x2024, //64
+	/*VMCS Shadowing Bitmap Addresses*/
+	VMREAD_BITMAP														= 0x2026, //64
+	VMWRITE_BITMAP														= 0x2028, //64
+	/*ENCLS-Exiting Bitmap*/
+	ENCLS_EXITING_BITMAP												= 0x202E, //64
+	/*ENCLV-Exiting Bitmap*/
+	EXCLV_EXITING_BITMAP												= 0x2036, //64
+	/*PCONFIG-Exiting Bitmap*/
+	PCONFIG_EXITING_BITMAP												= 0x203E, //64
+	/*Control Field for Page-Modification Logging*/
+	PML_ADDRESS															= 0x200E, //64
+	/*Controls for Virtualization Exceptions*/
+	VIRTUALIZATION_EXCEPTION_INFORMATION_ADDRESS						= 0x202A, //64
+	EPTP_INDEX															= 0x0004, //16
+	/*XSS-Exiting Bitmap*/
+	XSS_EXISTING_BITMAP													= 0x202C, //64
+	/*Sub-Page-Permission-Table Pointer (SPPTP)*/
+	SUB_PAGE_PERMISSION_TABLE_POINTER									= 0x2030, //64
+	/*Fields Related to Hypervisor-Managed Linear-Address Translation*/
+	HLAT_POINTER														= 0x2040, //64
+	HLAT_PREFIX_SIZE													= 0x0006, //16
+	/*Fields Related to PASID Translation*/
+	LOW_PASID_DIRECTORY_ADDRESS											= 0x2038, //64
+	HIGH_PASID_DIRECTORY_ADDRESS										= 0x203A, //64
+	/*Instruction-Timeout Control*/
+	INSTRUCTION_TIMEOUT_CONTROL											= 0x4024, //32
+	/*Fields Controlling Virtualization of the IA32_SPEC_CTRL MSR*/
+	IA32_SPEC_CTRL_MASK													= 0x204A, //64
+	IA32_SPEC_CTRL_SHADOW												= 0x204C //64
+}VM_EXECUTION_CONTROL_FIELDS;
+
 typedef enum _VM_EXIT_CONTROL_FIELDS
 {
 	/*VM-Exit Controls*/
