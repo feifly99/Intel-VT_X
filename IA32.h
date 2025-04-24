@@ -3,6 +3,73 @@
 
 #include "base.h"
 
+extern ULONG64 __vasm__isVMXOperationsSupported();
+extern ULONG64 __vasm__setCR4VMXEBit();
+extern ULONG64 __vsm__getCR4();
+extern ULONG64 __vsm__restoreCR4();
+extern ULONG64 __vsm__VMExitHandler();
+extern ULONG64 __vsm__getCS();
+extern ULONG64 __vsm__getSS();
+extern ULONG64 __vsm__getDS();
+extern ULONG64 __vsm__getES();
+extern ULONG64 __vsm__getFS();
+extern ULONG64 __vsm__getGS();
+extern ULONG64 __vsm__getLDTR();
+extern ULONG64 __vsm__getTR();
+extern ULONG64 __vsm__getGDTbase();
+extern ULONG64 __vsm__getGDTlimit();
+extern ULONG64 __vsm__getIDTbase();
+extern ULONG64 __vsm__getIDTlimit();
+extern ULONG64 __vsm__vmLaunch();
+extern ULONG64 __vsm__guestEntry();
+extern ULONG64 __vsm__hostEntry();
+extern ULONG64 __vsm__NOP();
+
+#define USED 1
+#define UNUSED 0
+
+VOID __fastcall runRoutineForAllCpus(
+	IN VOID(__fastcall* eachCpuRoutine)(PVOID),
+	IN PVOID args
+);
+
+VOID __fastcall runRoutineAtPreciseCpu(
+	IN VOID(__fastcall* routine)(PVOID),
+	IN PVOID args,
+	IN ULONG targetCpuIndex
+);
+
+VOID __fastcall checkCurrCpuIndex(
+	IN PVOID args
+);
+
+VOID ExFreeMemory(
+	OUT PVOID* mem
+);
+
+typedef struct _SEGEMENT_REGISTER_STRUCT
+{
+	ULONG64 selector;
+	ULONG64 baseAddress;
+	ULONG64 segementLimit;
+	ULONG64 accessRight;
+}SRS, *PSRS;
+
+typedef struct _VIRTUAL_CPU_STRUCT
+{
+	ULONG64 currentCr4;
+	LONG_PTR VMX_ON_REGION_PHYSICAL_ADDRESS;
+	PVOID VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS;
+	LONG_PTR VMX_VMCS_REGION_PHYSICAL_ADDRESS;
+	PVOID VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS;
+	PVOID virtualGuestStack;
+	SIZE_T virtualGuestStackSize;
+	PVOID virtualGuestStackBottom;
+	PVOID virtualHostStack;
+	SIZE_T virtualHostStackSize;
+	PVOID virtualHostStackBottom;
+}VCPU, *PVCPU;
+
 typedef enum _IA32_INDEXES
 {
 	IA32_APIC_BASE											= 0x001B, //00000000`FEE00C00
@@ -15,6 +82,7 @@ typedef enum _IA32_INDEXES
 	IA32_PERF_CTL											= 0x0199, //00000000`00001A00
 	IA32_MISC_ENABLE										= 0x01A0, //00000000`00850089
 	IA32_DEBUGCTL											= 0x01D9, //0
+	IA32_PAT												= 0x0277, //00070106`00070106
 	IA32_FIXED_CTR_CTRL										= 0x038D, //0
 	IA32_PERF_GLOBAL_STATUS									= 0x038E, //0
 	IA32_PERF_GLOBAL_CTRL									= 0x038F, //00000000`0000000f
@@ -54,7 +122,7 @@ typedef enum _IA32_INDEXES
 	IA32_EFER												= 0xC0000080, //00000000`00000d01
 	IA32_FS_BASE											= 0xC0000100, //00000000`00000000
 	IA32_GS_BASE											= 0xC0000101, //FFFFAD01`64090000
-	IA32_KERNEL_FS_BASE										= 0xC0000102, //00000000`00350000
+	IA32_KERNEL_GS_BASE										= 0xC0000102, //00000000`00350000
 	IA32_TSC_AUX											= 0xC0000103  //00000000`00000006
 	/*No Such MSRs*/
 	//IA32_SMBASE											= 0x009E, //no such msr but VMX region referenced
@@ -71,9 +139,9 @@ typedef enum _GUEST_STATE_AREA_FIELDS
 
 	GUEST_DR7												= 0x681A,
 
+	GUEST_RFLAGS											= 0x6820,
 	GUEST_RSP												= 0x681C,
 	GUEST_RIP												= 0x681E,
-	GUEST_RFLAGS											= 0x6820,
 
 	GUEST_CS_SELECTOR										= 0x0802,  //16
 	GUEST_SS_SELECTOR										= 0x0804,  //16
