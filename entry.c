@@ -6,13 +6,48 @@
 #pragma warning(disable: 6011)
 #pragma warning(disable: 4996)
 
-ULONG_PTR KeBugCheckExAddress = 0;
+ULONG_PTR bugCheck = 0;
+ULONG64 GlobalDebugWindow = 0xBBBBBBBB;
+
+ULONG64 DRIVER_RIP = 0;
+
+ULONG64 tempFLAGS = 0;
+
+ULONG GUEST_RIP_INDEX = GUEST_RIP;
+ULONG GUEST_RSP_INDEX = GUEST_RSP;
+ULONG GUEST_RFLAGS_INDEX = GUEST_RFLAGS;
+ULONG HOST_RIP_INDEX =  HOST_RIP;
+ULONG HOST_RSP_INDEX =  HOST_RSP;
+ULONG VM_EXIT_REASON_INDEX = VEIF_EXIT_REASON;
+ULONG VM_EXIT_QUALIFICATION_INDEX = VEIF_EXIT_QUALIFICATION;
+ULONG VM_INSTRUCTION_LENGTH_INDEX = VEIF_VM_EXIT_INSTRUCTION_LENGTH;
+
+ULONG64 __RAX	 = 0;
+ULONG64 __RBX	 = 0;
+ULONG64 __RCX	 = 0;
+ULONG64 __RDX	 = 0;
+ULONG64 __RSI	 = 0;
+ULONG64 __RDI	 = 0;
+ULONG64 __RSP	 = 0;
+ULONG64 __RBP	 = 0;
+ULONG64 __R8	 = 0;
+ULONG64 __R9	 = 0;
+ULONG64 __R10	 = 0;
+ULONG64 __R11	 = 0;
+ULONG64 __R12	 = 0;
+ULONG64 __R13	 = 0;
+ULONG64 __R14	 = 0;
+ULONG64 __R15	 = 0;
+ULONG64 __RFLAGS = 0;
+
+int times = 0;
+int mss = 0x4F1C7752;
 
 #define print(s) \
 do\
 {\
 	ULONG64 ______________x = (s);\
-	DbgPrint("[%llu] [0x%p] <- %s\n", ______________x, (PVOID)______________x, #s);\
+	DbgPrint("%s [%llu] [0x%p] <- \n", #s, ______________x, (PVOID)______________x);\
 }while(0)
 
 PVCPU vCpus = NULL;
@@ -24,36 +59,119 @@ VOID driverUnload(PDRIVER_OBJECT driverObject)
 }
 
 VOID getSegementRegisterAttributes(
+	IN SEGEMENT_TYPE type,
 	IN ULONG64 selector,
-	IN UCHAR isSegementUsed,
+	IN UCHAR usable,
 	IN OUT SRA* sra
 )
 {
-	ULONG_PTR GDTbase = __vsm__getGDTbase();
-	ULONG64 index = selector >> 3; 
-	ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
-	ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
-	sra->selector = (USHORT)selector;
-	sra->baseAddress = (ULONG)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
-	ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
-	if (currentSelectorGdtEntry & 0x000F000000000000ull)
+	if (type == 'cs' || type == 'ss' || type == 'ds' || type == 'es')
 	{
-		sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
+		ULONG_PTR GDTbase = __vsm__getGDTbase();
+		ULONG64 index = selector >> 3;
+		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+		sra->selector = (USHORT)selector;
+		sra->baseAddress = (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
+		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
+		if (currentSelectorGdtEntry & 0x000F000000000000ull)
+		{
+			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
+		}
+		else
+		{
+			sra->segementLimit = segementLimitTemp;
+		}
+		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
+		if (usable)
+		{
+			sra->accessRight |= 0x10000ul;
+		}
 	}
-	else
+	if (type == 'fs' || type == 'gs')
 	{
-		sra->segementLimit = segementLimitTemp;
+		ULONG_PTR GDTbase = __vsm__getGDTbase();
+		ULONG64 index = selector >> 3;
+		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+		sra->selector = (USHORT)selector;
+		sra->baseAddress = 0; //需要从MSRs读取
+		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
+		if (currentSelectorGdtEntry & 0x000F000000000000ull)
+		{
+			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
+		}
+		else
+		{
+			sra->segementLimit = segementLimitTemp;
+		}
+		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
+		if (usable)
+		{
+			sra->accessRight |= 0x10000ul;
+		}
 	}
-	sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
-	sra->accessRight |= (isSegementUsed ? 0x10000ul : 0);
+	if (type == 'ldtr')
+	{
+		ULONG_PTR GDTbase = __vsm__getGDTbase();
+		ULONG64 index = selector >> 3;
+		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+		sra->selector = (USHORT)selector;
+		sra->baseAddress = (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
+		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
+		if (currentSelectorGdtEntry & 0x000F000000000000ull)
+		{
+			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
+		}
+		else
+		{
+			sra->segementLimit = segementLimitTemp;
+		}
+		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
+		if (usable)
+		{
+			sra->accessRight |= 0x10000ul;
+		}
+	}
+	if (type == 'tr')
+	{
+		ULONG_PTR GDTbase = __vsm__getGDTbase();
+		ULONG64 index = selector >> 3;
+		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+		sra->selector = (USHORT)selector;
+		print(currentSelectorGdtEntryPointer);
+		print(currentSelectorGdtEntry);
+		sra->baseAddress = (*(ULONG_PTR*)(currentSelectorGdtEntryPointer + 8)) << 32;
+		print(sra->baseAddress);
+		sra->baseAddress += (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
+		print(sra->baseAddress);
+		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
+		if (currentSelectorGdtEntry & 0x000F000000000000ull)
+		{
+			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
+		}
+		else
+		{
+			sra->segementLimit = segementLimitTemp;
+		}
+		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
+		if (usable)
+		{
+			sra->accessRight |= 0x10000ul;
+		}
+	}
 	return;
 }
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 {
-	KeBugCheckExAddress = (ULONG_PTR)KeBugCheckEx;
+	bugCheck = (ULONG_PTR)KeBugCheckEx;
+
 	UNREFERENCED_PARAMETER(regPath);
 	driverObject->DriverUnload = driverUnload;
+
 	if (__vasm__isVMXOperationsSupported() == 1)
 	{
 		DbgPrint("此CPU架构支持VMXE模式！\n");
@@ -64,7 +182,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	}
 	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
 	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
-	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU)); 
+	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU));
 	print(totalCpuCount);
 	SIZE_T regionSizeNeeded = 0x1000;
 	ULONG vmcsIdentifier = (ULONG)1;
@@ -119,16 +237,20 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	/*3.VM-Execution Control字段*/
 	__vmx_vmwrite(VECF_PIN_BASED_VM_EXECUTION_CONTROL, 0x16ul); //物理机 0x16ul
 	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x4006172ul); //物理机 0x4006172ul
+	/*PVOID msrBitmap = ExAllocatePoolWithTag(NonPagedPool, 0x4000, 'msrs');
+	memset(msrBitmap, 0xFF, 0x4000);
+	PHYSICAL_ADDRESS msrBitmapPhy = MmGetPhysicalAddress(msrBitmap);
+	__vmx_vmwrite(VECF_MSR_BITMAPS, msrBitmapPhy.QuadPart);*/
 	/*4.Host-State Area字段*/
 	SRA h_cs, h_ss, h_ds, h_es, h_fs, h_gs, h_ldtr, h_tr;
-	getSegementRegisterAttributes(__vsm__getCS(), USED, &h_cs);
-	getSegementRegisterAttributes(__vsm__getSS(), UNUSED, &h_ss);
-	getSegementRegisterAttributes(__vsm__getDS(), UNUSED, &h_ds);
-	getSegementRegisterAttributes(__vsm__getES(), UNUSED, &h_es);
-	getSegementRegisterAttributes(__vsm__getFS(), USED, &h_fs);
-	getSegementRegisterAttributes(__vsm__getGS(), UNUSED, &h_gs);
-	getSegementRegisterAttributes(__vsm__getLDTR(), UNUSED, &h_ldtr);
-	getSegementRegisterAttributes(__vsm__getTR(), UNUSED, &h_tr);
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 0, &h_cs);
+	getSegementRegisterAttributes('ss', __vsm__getSS(), 0, &h_ss);
+	getSegementRegisterAttributes('ds', __vsm__getDS(), 0, &h_ds);
+	getSegementRegisterAttributes('es', __vsm__getES(), 0, &h_es);
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &h_fs);
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &h_gs);
+	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 0, &h_ldtr);
+	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &h_tr);
 	__vmx_vmwrite(HOST_CR0, __readcr0());
 	__vmx_vmwrite(HOST_CR3, __readcr3());
 	__vmx_vmwrite(HOST_CR4, __readcr4());
@@ -147,66 +269,56 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
 	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());
 	/*5.Guest-State Area字段*/
-	/*SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
-	getSegementRegisterAttributes(__vsm__getCS(), USED, &g_cs);
-	getSegementRegisterAttributes(__vsm__getSS(), UNUSED, &g_ss);
-	getSegementRegisterAttributes(__vsm__getDS(), UNUSED, &g_ds);
-	getSegementRegisterAttributes(__vsm__getES(), UNUSED, &g_es);
-	getSegementRegisterAttributes(__vsm__getFS(), USED, &g_fs);
-	getSegementRegisterAttributes(__vsm__getGS(), UNUSED, &g_gs);
-	getSegementRegisterAttributes(__vsm__getLDTR(), UNUSED, &g_ldtr);
-	getSegementRegisterAttributes(__vsm__getTR(), UNUSED, &g_tr);
+	SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs);
+	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
+	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
+	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs);
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs);
+	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 1, &g_ldtr);
+	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &g_tr);
+	//选择子
+	__vmx_vmwrite(GUEST_FS_SELECTOR, g_fs.selector);
+	__vmx_vmwrite(GUEST_GS_SELECTOR, g_gs.selector);
+	__vmx_vmwrite(GUEST_TR_SELECTOR, g_tr.selector);
+	//基地址
+	__vmx_vmwrite(GUEST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(GUEST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
+	__vmx_vmwrite(GUEST_TR_BASE_ADDRESS, (PVOID)g_tr.baseAddress);
+	//限制
+	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, g_fs.segementLimit); 
+	__vmx_vmwrite(GUEST_GS_SEGEMENT_LIMIT, g_gs.segementLimit);
+	__vmx_vmwrite(GUEST_TR_SEGEMENT_LIMIT, g_tr.segementLimit);
+	//权限
+	__vmx_vmwrite(GUEST_CS_ACCESS_RIGHTS, g_cs.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_SS_ACCESS_RIGHTS, g_ss.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_DS_ACCESS_RIGHTS, g_ds.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_ES_ACCESS_RIGHTS, g_es.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_FS_ACCESS_RIGHTS, g_fs.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_GS_ACCESS_RIGHTS, g_gs.accessRight & ~0xF00ull); 
+	__vmx_vmwrite(GUEST_LDTR_ACCESS_RIGHTS, g_ldtr.accessRight & ~0xF00ull);
+	__vmx_vmwrite(GUEST_TR_ACCESS_RIGHTS, g_tr.accessRight & ~0xF00ull);
+	//G/IDT表
+	__vmx_vmwrite(GUEST_GDTR_BASE, __vsm__getGDTbase());
+	__vmx_vmwrite(GUEST_IDTR_BASE, __vsm__getIDTbase());
+	__vmx_vmwrite(GUEST_GDTR_LIMIT, __vsm__getGDTlimit()); //28.3.1.3
+	__vmx_vmwrite(GUEST_IDTR_LIMIT, __vsm__getIDTlimit()); //28.3.1.3
+	//其他
+	__vmx_vmwrite(GUEST_VMCS_LINK_POINTER, 0xFFFFFFFFFFFFFFFFull);
+
+	//寄存器
 	__vmx_vmwrite(GUEST_CR0, __readcr0());
 	__vmx_vmwrite(GUEST_CR3, __readcr3());
 	__vmx_vmwrite(GUEST_CR4, __readcr4());
-	__vmx_vmwrite(GUEST_DR7, __readdr(7));
+	__vmx_vmwrite(GUEST_DR7, __vsm__getDR7());
 	__vmx_vmwrite(GUEST_RFLAGS, __readeflags());
-	__vmx_vmwrite(GUEST_RSP, (ULONG64)vCpus[currentVMCSCpuIndex].virtualGuestStackBottom);
-	__vmx_vmwrite(GUEST_RIP, (ULONG64)guests);
-	__vmx_vmwrite(GUEST_CS_SELECTOR, (ULONG64)g_cs.selector);
-	__vmx_vmwrite(GUEST_SS_SELECTOR, (ULONG64)g_ss.selector);
-	__vmx_vmwrite(GUEST_DS_SELECTOR, (ULONG64)g_ds.selector);
-	__vmx_vmwrite(GUEST_ES_SELECTOR, (ULONG64)g_es.selector);
-	__vmx_vmwrite(GUEST_FS_SELECTOR, (ULONG64)g_fs.selector);
-	__vmx_vmwrite(GUEST_GS_SELECTOR, (ULONG64)g_gs.selector);
-	__vmx_vmwrite(GUEST_LDTR_SELECTOR, (ULONG64)g_ldtr.selector);
-	__vmx_vmwrite(GUEST_TR_SELECTOR, (ULONG64)g_tr.selector);
-	__vmx_vmwrite(GUEST_CS_BASE_ADDRESS, (ULONG64)g_cs.baseAddress & 0xFFFFFFFFull);
-	__vmx_vmwrite(GUEST_SS_BASE_ADDRESS, (ULONG64)g_ss.baseAddress & 0xFFFFFFFFull);
-	__vmx_vmwrite(GUEST_DS_BASE_ADDRESS, (ULONG64)g_ds.baseAddress & 0xFFFFFFFFull);
-	__vmx_vmwrite(GUEST_ES_BASE_ADDRESS, (ULONG64)g_es.baseAddress & 0xFFFFFFFFull);
-	__vmx_vmwrite(GUEST_FS_BASE_ADDRESS, (ULONG64)g_fs.baseAddress);
-	__vmx_vmwrite(GUEST_GS_BASE_ADDRESS, (ULONG64)g_gs.baseAddress);
-	__vmx_vmwrite(GUEST_LDTR_BASE_ADDRESS, (ULONG64)g_ldtr.baseAddress);
-	__vmx_vmwrite(GUEST_TR_BASE_ADDRESS, (ULONG64)g_tr.baseAddress);
-	__vmx_vmwrite(GUEST_CS_SEGEMENT_LIMIT, (ULONG64)g_cs.segementLimit);
-	__vmx_vmwrite(GUEST_SS_SEGEMENT_LIMIT, (ULONG64)g_ss.segementLimit);
-	__vmx_vmwrite(GUEST_DS_SEGEMENT_LIMIT, (ULONG64)g_ds.segementLimit);
-	__vmx_vmwrite(GUEST_ES_SEGEMENT_LIMIT, (ULONG64)g_es.segementLimit);
-	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, (ULONG64)g_fs.segementLimit);
-	__vmx_vmwrite(GUEST_GS_SEGEMENT_LIMIT, (ULONG64)g_gs.segementLimit);
-	__vmx_vmwrite(GUEST_LDTR_SEGEMENT_LIMIT, (ULONG64)g_ldtr.segementLimit);
-	__vmx_vmwrite(GUEST_TR_SEGEMENT_LIMIT, (ULONG64)g_tr.segementLimit);
-	__vmx_vmwrite(GUEST_CS_ACCESS_RIGHTS, (ULONG64)g_cs.accessRight);
-	__vmx_vmwrite(GUEST_SS_ACCESS_RIGHTS, (ULONG64)g_ss.accessRight);
-	__vmx_vmwrite(GUEST_DS_ACCESS_RIGHTS, (ULONG64)g_ds.accessRight);
-	__vmx_vmwrite(GUEST_ES_ACCESS_RIGHTS, (ULONG64)g_es.accessRight);
-	__vmx_vmwrite(GUEST_FS_ACCESS_RIGHTS, (ULONG64)g_fs.accessRight);
-	__vmx_vmwrite(GUEST_GS_ACCESS_RIGHTS, (ULONG64)g_gs.accessRight);
-	__vmx_vmwrite(GUEST_LDTR_ACCESS_RIGHTS, (ULONG64)g_ldtr.accessRight);
-	__vmx_vmwrite(GUEST_TR_ACCESS_RIGHTS, (ULONG64)g_tr.accessRight);
-	__vmx_vmwrite(GUEST_GDTR_BASE, __vsm__getGDTbase());
-	__vmx_vmwrite(GUEST_IDTR_BASE, __vsm__getIDTbase());
-	__vmx_vmwrite(GUEST_GDTR_LIMIT, __vsm__getGDTlimit() & ~0xFFFF0000ull);
-	__vmx_vmwrite(GUEST_IDTR_LIMIT, __vsm__getIDTlimit() & ~0xFFFF0000ull);
-	__vmx_vmwrite(GUEST_IA32_DEBUGCTL, __readmsr(IA32_DEBUGCTL));
-	__vmx_vmwrite(GUEST_VMCS_LINK_POINTER, 0xFFFFFFFFFFFFFFFFull);*/
+	__vmx_vmwrite(GUEST_RSP, (PVOID)vCpus[currentVMCSCpuIndex].virtualGuestStackBottom);
+	__vmx_vmwrite(GUEST_RIP, (PVOID)__vsm__guestEntry);
 
-	__vsm__NOP();
-	print(__vmx_vmlaunch());
-	ULONG64 error = 0;
-	__vmx_vmread(VEIF_VM_INSTRUCTION_ERROR_FIELD, &error);
-	print(error);
+	__vsm__vmlaunchSaveRegisters();
+	
+	__vsm__trap();
 
-	return STATUS_SUCCESS;
+	return STATUS_SUCCESS;	
 }
