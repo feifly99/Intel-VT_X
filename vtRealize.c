@@ -25,7 +25,7 @@ VOID __fastcall runRoutineAtPreciseCpu(
 	ULONG initialCpuIndex = KeGetCurrentProcessorIndex();
 	if (targetCpuIndex > KeQueryActiveProcessorCount(NULL) - 1)
 	{
-		DbgPrint("目标CPU编号超过逻辑CPU个数");
+		DbgPrint("鐩爣CPU缂栧彿瓒呰繃閫昏緫CPU涓暟");
 		return;
 	}
 	KeSetSystemAffinityThread((KAFFINITY)(1 << targetCpuIndex));
