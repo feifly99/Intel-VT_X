@@ -236,7 +236,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	__vmx_vmwrite(VEnCF_VM_ENTRY_CONTROLS, 0x13FBul); //物理机 0x13FBul
 	/*3.VM-Execution Control字段*/
 	__vmx_vmwrite(VECF_PIN_BASED_VM_EXECUTION_CONTROL, 0x16ul); //物理机 0x16ul
-	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x4006172ul); //物理机 0x4006172ul
+	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x84026172ul); //物理机 0x4006172ul
+	__vmx_vmwrite(VECF_SECONDARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0xC101008ul); //物理机 0x4006172ul
+	__vmx_vmwrite(VECF_TERTIARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x40ul); //物理机 0x4006172ul
 	/*PVOID msrBitmap = ExAllocatePoolWithTag(NonPagedPool, 0x4000, 'msrs');
 	memset(msrBitmap, 0xFF, 0x4000);
 	PHYSICAL_ADDRESS msrBitmapPhy = MmGetPhysicalAddress(msrBitmap);
