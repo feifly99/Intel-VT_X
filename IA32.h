@@ -3,30 +3,33 @@
 
 #include "base.h"
 
+extern VOID __vsm__trap();
+extern VOID __vsm__trap2();
+extern VOID __vsm__breakStack(INT a, INT b);
+extern VOID __vsm__SetGlobalDebugWindow();
+extern VOID __vsm__vmlaunchSaveRegisters();
 extern ULONG64 __vasm__isVMXOperationsSupported();
 extern ULONG64 __vasm__setCR4VMXEBit();
 extern ULONG64 __vsm__getCR4();
-extern ULONG64 __vsm__restoreCR4();
-extern ULONG64 __vsm__VMExitHandler();
-extern ULONG64 __vsm__getCS();
-extern ULONG64 __vsm__getSS();
-extern ULONG64 __vsm__getDS();
-extern ULONG64 __vsm__getES();
-extern ULONG64 __vsm__getFS();
-extern ULONG64 __vsm__getGS();
-extern ULONG64 __vsm__getLDTR();
-extern ULONG64 __vsm__getTR();
+extern VOID __vsm__restoreCR4();
+extern ULONG64 __vsm__getDR7();
+extern USHORT __vsm__getCS();
+extern USHORT __vsm__getSS();
+extern USHORT __vsm__getDS();
+extern USHORT __vsm__getES();
+extern USHORT __vsm__getFS();
+extern USHORT __vsm__getGS();
+extern USHORT __vsm__getLDTR();
+extern USHORT __vsm__getTR();
 extern ULONG64 __vsm__getGDTbase();
-extern ULONG64 __vsm__getGDTlimit();
+extern ULONG __vsm__getGDTlimit();
 extern ULONG64 __vsm__getIDTbase();
-extern ULONG64 __vsm__getIDTlimit();
+extern ULONG __vsm__getIDTlimit();
 extern ULONG64 __vsm__vmLaunch();
 extern ULONG64 __vsm__guestEntry();
 extern ULONG64 __vsm__hostEntry();
-extern ULONG64 __vsm__NOP();
-
-#define USED 1
-#define UNUSED 0
+extern ULONG64 inline __vsm__NOP();
+extern VOID __vsm__INT3();
 
 VOID __fastcall runRoutineForAllCpus(
 	IN VOID(__fastcall* eachCpuRoutine)(PVOID),
@@ -47,13 +50,17 @@ VOID ExFreeMemory(
 	OUT PVOID* mem
 );
 
-typedef struct _SEGEMENT_REGISTER_STRUCT
+typedef enum _SEGEMENT_TYPE
 {
-	ULONG64 selector;
-	ULONG64 baseAddress;
-	ULONG64 segementLimit;
-	ULONG64 accessRight;
-}SRS, *PSRS;
+	SEG_CS = 'cs',
+	SEG_SS = 'ss',
+	SEG_DS = 'ds',
+	SEG_ES = 'es',
+	SEG_FS = 'fs',
+	SEG_GS = 'gs',
+	SEG_LDTR = 'ldtr',
+	SEG_TR = 'tr'
+}SEGEMENT_TYPE;
 
 typedef struct _VIRTUAL_CPU_STRUCT
 {
