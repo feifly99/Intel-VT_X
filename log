@@ -1,0 +1,450 @@
+前导（开启所有处理器的VMXE扩展位）
+	if (__vasm__isVMXOperationsSupported() == 1)
+	{
+		DbgPrint("此CPU架构支持VMXE模式！\n");
+	}
+	else
+	{
+		DbgPrint("此CPU架构不支持VMXE模式！\n");
+	}
+	ULONG initialCpuIndex = KeGetCurrentProcessorIndex();
+	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
+	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
+	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU)); 
+	PHYSICAL_ADDRESS maxAddressAcceptable = { 0 };
+	maxAddressAcceptable.QuadPart = MAXULONG64;
+	for (ULONG loop = 0; loop < totalCpuCount; loop++)
+	{
+		KeSetSystemAffinityThread((KAFFINITY)(1 << loop));
+		DbgPrint("当前处理的虚拟CPU编号：%lu(%lu) -> 修改前CR4: %llX\n", loop, KeGetCurrentProcessorIndex(), __vsm__getCR4());
+		__vasm__setCR4VMXEBit();
+		vCpus[loop].currentCr4 = __vsm__getCR4();
+		DbgPrint("当前处理的虚拟CPU编号：%lu(%lu) -> 修改后CR4: %llX\n", loop, KeGetCurrentProcessorIndex(), vCpus[loop].currentCr4);
+		PVOID virContiguousAdd = MmAllocateContiguousMemory((((SIZE_T)__readmsr(IA32_VMX_BASIC)) >> 32) & 0xFFFFull, maxAddressAcceptable);
+		RtlZeroMemory(virContiguousAdd, (((SIZE_T)__readmsr(IA32_VMX_BASIC)) >> 32) & 0xFFFFull);
+		PHYSICAL_ADDRESS phyContiguousAdd = MmGetPhysicalAddress(virContiguousAdd);
+		vCpus[loop].VMX_ON_REGION_PHYSICAL = phyContiguousAdd.QuadPart;
+		//fulfill VMCS Region Identifier
+		*(ULONG*)virContiguousAdd = (ULONG)__readmsr(IA32_VMX_BASIC) & 0x7FFFFFFFul;
+		if (__vmx_on(&vCpus[loop].VMX_ON_REGION_PHYSICAL) == 0)
+		{
+			DbgPrint("编号为%lu(%lu)的虚拟处理器已经进入VMXE模式.\n", loop, KeGetCurrentProcessorIndex());
+		}
+		else
+		{
+			DbgPrint("编号为%lu(%lu)的虚拟处理器没有进入VMXE模式！\n", loop, KeGetCurrentProcessorIndex());
+		}
+	}
+	KeSetSystemAffinityThread((KAFFINITY)(1 << initialCpuIndex));
+
+
+
+/*****************************************************/
+if (__vasm__isVMXOperationsSupported() == 1)
+	{
+		DbgPrint("此CPU架构支持VMXE模式！\n");
+	}
+	else
+	{
+		DbgPrint("此CPU架构不支持VMXE模式！\n");
+	}
+	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
+	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
+	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU)); 
+	print(totalCpuCount);
+	SIZE_T regionSizeNeeded = 0x1000;
+	ULONG vmcsIdentifier = (ULONG)1;
+	//初始化虚拟CPU的属性
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		vCpus[j].currentCr4 = __vsm__getCR4();
+
+		vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = ExAllocatePoolWithTag(NonPagedPool, regionSizeNeeded, 'vmon');
+		RtlZeroMemory(vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS, regionSizeNeeded);
+		PHYSICAL_ADDRESS tempVmxon = { 0 };
+		tempVmxon = MmGetPhysicalAddress(vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpus[j].VMX_ON_REGION_PHYSICAL_ADDRESS = tempVmxon.QuadPart;
+
+		vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = ExAllocatePoolWithTag(NonPagedPool, regionSizeNeeded, 'vmcs');
+		RtlZeroMemory(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS, regionSizeNeeded);
+		PHYSICAL_ADDRESS tempVmcsRegion = { 0 };
+		tempVmcsRegion = MmGetPhysicalAddress(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpus[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
+
+		vCpus[j].virtualGuestStackSize = 0x5000;
+		vCpus[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualGuestStackSize, 'gstk');
+		RtlZeroMemory(vCpus[j].virtualGuestStack, vCpus[j].virtualGuestStackSize);
+		vCpus[j].virtualGuestStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualGuestStack + vCpus[j].virtualGuestStackSize - 0x1000);
+
+		vCpus[j].virtualHostStackSize = 0x5000;
+		vCpus[j].virtualHostStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualHostStackSize, 'hstk');
+		RtlZeroMemory(vCpus[j].virtualHostStack, vCpus[j].virtualHostStackSize);
+		vCpus[j].virtualHostStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualHostStack + vCpus[j].virtualHostStackSize - 0x1000);
+
+		*(ULONG*)vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
+		*(ULONG*)vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
+	}
+	//开启CR4.VMXE位
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		KeSetSystemAffinityThread((KAFFINITY)(1 << j));
+		__vasm__setCR4VMXEBit();
+		vCpus[j].currentCr4 = __vsm__getCR4();
+		__vmx_on(&vCpus[j].VMX_ON_REGION_PHYSICAL_ADDRESS);
+	}
+	//选择一个虚拟CPU的VMCS作为`current VMCS`
+	KAFFINITY currentVMCSCpuIndex = 1;
+	KeSetSystemAffinityThread((KAFFINITY)(1 << currentVMCSCpuIndex));
+	__vmx_vmclear(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
+	__vmx_vmptrld(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
+	//写入VMCS各个字段
+	/*1.VM-Exit Control字段*/
+	__vmx_vmwrite(VExCF_PRIMARY_VM_EXIT_CONTROLS, 0x36FFBul); //物理机 0x36FFB
+	/*2.VM-Entry Control字段*/
+	__vmx_vmwrite(VEnCF_VM_ENTRY_CONTROLS, 0x13FBul); //物理机 0x13FBul
+	/*3.VM-Execution Control字段*/
+	__vmx_vmwrite(VECF_PIN_BASED_VM_EXECUTION_CONTROL, 0x16ul); //物理机 0x16ul
+	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x4006172ul); //物理机 0x4006172ul
+	/*4.Host-State Area字段*/
+	SRA h_cs, h_ss, h_ds, h_es, h_fs, h_gs, h_ldtr, h_tr;
+	getSegementRegisterAttributes('cs',__vsm__getCS(), 0, &h_cs);
+	getSegementRegisterAttributes('ss',__vsm__getSS(), 0, &h_ss);
+	getSegementRegisterAttributes('ds',__vsm__getDS(), 0, &h_ds);
+	getSegementRegisterAttributes('es',__vsm__getES(), 0, &h_es);
+	getSegementRegisterAttributes('fs',__vsm__getFS(), 0, &h_fs);
+	getSegementRegisterAttributes('gs',__vsm__getGS(), 0, &h_gs);
+	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 0, &h_ldtr);
+	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &h_tr);
+	__vmx_vmwrite(HOST_CR0, __readcr0());
+	__vmx_vmwrite(HOST_CR3, __readcr3());
+	__vmx_vmwrite(HOST_CR4, __readcr4());
+	__vmx_vmwrite(HOST_RSP, (PVOID)vCpus[currentVMCSCpuIndex].virtualHostStackBottom);
+	__vmx_vmwrite(HOST_RIP, (PVOID)__vsm__hostEntry);
+	__vmx_vmwrite(HOST_CS_SELECTOR, h_cs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_SS_SELECTOR, h_ss.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_DS_SELECTOR, h_ds.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_ES_SELECTOR, h_es.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_FS_SELECTOR, h_fs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_GS_SELECTOR, h_gs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_TR_SELECTOR, h_tr.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(HOST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
+	__vmx_vmwrite(HOST_TR_BASE_ADDRESS, (PVOID)h_tr.baseAddress);
+	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
+	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());	
+	/*5.Guest-State Area字段*/
+	SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 0, &g_cs);
+	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
+	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
+	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 1, &g_fs);
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 1, &g_gs);
+	getSegementRegisterAttributes('ldtr',__vsm__getLDTR(), 1, &g_ldtr);
+	getSegementRegisterAttributes('tr',__vsm__getTR(), 0, &g_tr); //必须清零， 28.3.1.2
+	//寄存器
+	__vmx_vmwrite(GUEST_CR0, __readcr0());
+	__vmx_vmwrite(GUEST_CR3, __readcr3());
+	__vmx_vmwrite(GUEST_CR4, __readcr4());
+	__vmx_vmwrite(GUEST_DR7, __readdr(7));
+	__vmx_vmwrite(GUEST_RFLAGS, __readeflags());
+	__vmx_vmwrite(GUEST_RSP, (PVOID)vCpus[currentVMCSCpuIndex].virtualGuestStackBottom);
+	__vmx_vmwrite(GUEST_RIP, (PVOID)__vsm__guestEntry);
+	//选择子
+	__vmx_vmwrite(GUEST_CS_SELECTOR, (ULONG64)g_cs.selector); //pass
+	__vmx_vmwrite(GUEST_SS_SELECTOR, (ULONG64)g_ss.selector); //pass
+	__vmx_vmwrite(GUEST_DS_SELECTOR, (ULONG64)g_ds.selector); //pass
+	__vmx_vmwrite(GUEST_ES_SELECTOR, (ULONG64)g_es.selector); //pass
+	__vmx_vmwrite(GUEST_FS_SELECTOR, (ULONG64)g_fs.selector); //pass
+	__vmx_vmwrite(GUEST_GS_SELECTOR, (ULONG64)g_gs.selector); //pass
+	__vmx_vmwrite(GUEST_LDTR_SELECTOR, (ULONG64)g_ldtr.selector); //pass
+	__vmx_vmwrite(GUEST_TR_SELECTOR, (ULONG64)g_tr.selector); //pass
+	//基地址
+	__vmx_vmwrite(GUEST_CS_BASE_ADDRESS, (ULONG64)g_cs.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_SS_BASE_ADDRESS, (ULONG64)g_ss.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_DS_BASE_ADDRESS, (ULONG64)g_ds.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_ES_BASE_ADDRESS, (ULONG64)g_es.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(GUEST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
+	__vmx_vmwrite(GUEST_LDTR_BASE_ADDRESS, (ULONG64)g_ldtr.baseAddress);
+	__vmx_vmwrite(GUEST_TR_BASE_ADDRESS, (ULONG64)g_tr.baseAddress);
+	//限制
+	__vmx_vmwrite(GUEST_CS_SEGEMENT_LIMIT, (ULONG64)g_cs.segementLimit);
+	__vmx_vmwrite(GUEST_SS_SEGEMENT_LIMIT, (ULONG64)g_ss.segementLimit);
+	__vmx_vmwrite(GUEST_DS_SEGEMENT_LIMIT, (ULONG64)g_ds.segementLimit);
+	__vmx_vmwrite(GUEST_ES_SEGEMENT_LIMIT, (ULONG64)g_es.segementLimit);
+	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, (ULONG64)g_fs.segementLimit);
+	__vmx_vmwrite(GUEST_GS_SEGEMENT_LIMIT, (ULONG64)g_gs.segementLimit);
+	__vmx_vmwrite(GUEST_LDTR_SEGEMENT_LIMIT, (ULONG64)g_ldtr.segementLimit);
+	__vmx_vmwrite(GUEST_TR_SEGEMENT_LIMIT, (ULONG64)g_tr.segementLimit);
+	//权限
+	__vmx_vmwrite(GUEST_CS_ACCESS_RIGHTS, (ULONG64)g_cs.accessRight); //g_cs.accessRight	
+	__vmx_vmwrite(GUEST_SS_ACCESS_RIGHTS, (ULONG64)g_ss.accessRight); //g_ss.accessRight
+	__vmx_vmwrite(GUEST_DS_ACCESS_RIGHTS, (ULONG64)g_ds.accessRight & ~0xF00ull); //g_ds.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_ES_ACCESS_RIGHTS, (ULONG64)g_es.accessRight & ~0xF00ull); //g_es.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_FS_ACCESS_RIGHTS, (ULONG64)g_fs.accessRight & ~0xF00ull); //g_fs.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_GS_ACCESS_RIGHTS, (ULONG64)g_gs.accessRight & ~0xF00ull); //g_gs.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_LDTR_ACCESS_RIGHTS, (ULONG64)g_tr.accessRight);
+	__vmx_vmwrite(GUEST_TR_ACCESS_RIGHTS, (ULONG64)g_tr.accessRight);
+	//G/IDT表
+	__vmx_vmwrite(GUEST_GDTR_BASE, __vsm__getGDTbase());
+	__vmx_vmwrite(GUEST_IDTR_BASE, __vsm__getIDTbase());
+	__vmx_vmwrite(GUEST_GDTR_LIMIT, __vsm__getGDTlimit() & ~0xFFFF0000ull); //28.3.1.3
+	__vmx_vmwrite(GUEST_IDTR_LIMIT, __vsm__getIDTlimit() & ~0xFFFF0000ull); //28.3.1.3
+	//其他
+	__vmx_vmwrite(GUEST_IA32_DEBUGCTL, __readmsr(IA32_DEBUGCTL));
+	__vmx_vmwrite(GUEST_VMCS_LINK_POINTER, 0xFFFFFFFFFFFFFFFFull);
+
+	__vsm__NOP();
+
+	print(__readeflags());
+
+	print(__vmx_vmlaunch());
+	ULONG64 error = 0;
+	__vmx_vmread(VEIF_VM_INSTRUCTION_ERROR_FIELD, &error);
+	print(error);
+
+/*****************************************************/
+
+
+
+
+	__vsm__hostEntry PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		cmp rcx, 32
+	jnz BSOD
+		mov rax, __RAX
+		mov rdx, __RDX
+		mov rcx, __RCX
+		wrmsr
+		
+		mov eax, GUEST_RIP_INDEX
+		vmread rax, rax
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmwrite rcx, rcx
+
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+BSOD:
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rcx, GlobalDebugWindow
+		call KeBugCheckExAddress
+	__vsm__hostEntry ENDP
+
+
+
+
+
+
+
+
+
+
+	__vsm__vmlaunchSaveRegisters PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov __RSI, rsi
+		mov __RDI, rdi
+		mov __RSP, rsp
+		mov __RBP, rbp
+		mov __R8, r8
+		mov __R9, r9
+		mov __R10, r10
+		mov __R11, r11
+		mov __R12, r12
+		mov __R13, r13
+		mov __R14, r14
+		mov __R15, r15
+		pushfq
+		pop rax
+		mov __RFLAGS, rax
+		pop rax
+		mov DRIVER_RIP, rax
+		vmlaunch
+	__vsm__vmlaunchSaveRegisters ENDP
+
+	__vsm__guestEntry PROC
+		sub tempFLAGS, 8
+		cmp rsp, tempFLAGS
+		jz trapCPUID
+		wrmsr
+trapCPUID:
+		cpuid
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RSI
+		mov rsp, __RSP
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15
+		jmp DRIVER_RIP
+		;放虎归山，只是让控制流继续走驱动
+		;但是VMCS已经为'launched'状态,可以在host以vmresume唤醒虚拟机
+	__vsm__guestEntry ENDP
+
+
+	__vsm__hostEntry PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		mov __RFLAGS, rcx
+
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		cmp rcx, 31
+	jz  BSOD
+		cmp rcx, 32
+	jz	HANDLE_WRMSR
+		cmp rcx, 10
+	jz  HANDLE_CPUID
+	jmp BSOD
+HANDLE_WRMSR:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+
+		wrmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		add rcx, 2
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+
+		vmresume
+HANDLE_RDMSR:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		rdmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		mov eax, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rax, rax
+		add rcx, rax
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+HANDLE_CPUID:
+		;mov ecx, GUEST_RFLAGS_INDEX
+		;vmread rcx, rcx
+		mov rax, __RFLAGS
+		push rax
+		popfq
+
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		cpuid
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		add rcx, 2
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+BSOD:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		shl rcx, 16
+		call KeBugCheckExAddress
