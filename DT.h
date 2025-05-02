@@ -7,7 +7,7 @@ typedef struct _SEGEMENT_REGISTER_ATTRIBUTES
 {
 	USHORT selector;
 	ULONG segementLimit;
-	ULONG baseAddress;
+	ULONG_PTR baseAddress;
 	ULONG accessRight;
 }SRA, *PSRA;
 
