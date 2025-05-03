@@ -5,6 +5,9 @@ EXTERN DRIVER_RIP  : QWORD
 
 EXTERN tempFLAGS: QWORD
 
+EXTERN GUEST_CR0_INDEX: DWORD
+EXTERN GUEST_CR3_INDEX: DWORD
+EXTERN GUEST_CR4_INDEX: DWORD
 EXTERN GUEST_RIP_INDEX: DWORD
 EXTERN GUEST_RSP_INDEX: DWORD
 EXTERN GUEST_RFLAGS_INDEX: DWORD
@@ -14,6 +17,9 @@ EXTERN VM_EXIT_REASON_INDEX: DWORD
 EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
 EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
 
+EXTERN __CR0   : QWORD
+EXTERN __CR3   : QWORD
+EXTERN __CR4   : QWORD
 EXTERN __RAX   : QWORD
 EXTERN __RBX   : QWORD
 EXTERN __RCX   : QWORD
@@ -22,6 +28,7 @@ EXTERN __RSI   : QWORD
 EXTERN __RDI   : QWORD
 EXTERN __RSP   : QWORD
 EXTERN __RBP   : QWORD
+EXTERN __RIP   : QWORD
 EXTERN __R8    : QWORD
 EXTERN __R9    : QWORD
 EXTERN __R10   : QWORD
@@ -31,6 +38,8 @@ EXTERN __R13   : QWORD
 EXTERN __R14   : QWORD
 EXTERN __R15   : QWORD
 EXTERN __RFLAGS: QWORD
+EXTERN EXIT_REASON:	DWORD
+EXTERN INSTRUCTION_LENGTH: DWORD
 
 .code
 	
@@ -86,6 +95,8 @@ EXTERN __RFLAGS: QWORD
 		mov DRIVER_RIP, rax
 		add rsp, 8
 		vmlaunch
+		mov ecx, 2222AAAAh
+		call bugCheck
 	__vsm__vmlaunchSaveRegisters ENDP
 
 	__vsm__guestEntry PROC
@@ -114,12 +125,12 @@ EXTERN __RFLAGS: QWORD
 
 	__vsm__trap PROC
 		mov eax, 1
-		cpuid
+		rdmsr
 		ret
 	__vsm__trap ENDP
 
 	__vsm__hostEntry PROC
-		;保存调用方除了RSP/RIP/RFLAGS的状态.
+		;保存调用方所有通用目的寄存器的状态.
 		;当前RSP = 外部分配的RSP.
 		;当前RIP = __vsm__hostEntry.
 		;当前RFLAGS = 10h，因为LOAD HOST STATE后，RFLAGS默认清零，除了第一位保留位.
@@ -138,37 +149,98 @@ EXTERN __RFLAGS: QWORD
 		mov __R13, r13
 		mov __R14, r14
 		mov __R15, r15
-		;设置当前上下文的RFLAGS为GUEST_RFLAGS
-		;防止由于几乎全零的RFLAGS导致某些指令(比如CPUID)无法执行
+
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		mov __RSP, rcx
+
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		mov __RIP, rcx
+
 		mov ecx, GUEST_RFLAGS_INDEX
 		vmread rcx, rcx
-		push rcx
-		popfq
-		;判断当前触发VM_EXIT的指令
+		mov __RFLAGS, rcx
+		
+		mov ecx, GUEST_CR0_INDEX
+		vmread rcx, rcx
+		mov __CR0, rcx
+		
+		mov ecx, GUEST_CR3_INDEX
+		vmread rcx, rcx
+		mov __CR3, rcx
+		
+		mov ecx, GUEST_CR4_INDEX
+		vmread rcx, rcx
+		mov __CR4, rcx
+
 		mov ecx, VM_EXIT_REASON_INDEX
-		vmread rcx,rcx
-		cmp rcx, 10
-	jnz NZ
-		;先把RIP加长度，越过当前指令
+		vmread rcx, rcx
+		mov EXIT_REASON, ecx
+
 		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
-		vmread rcx, rcx ;长度
-		mov eax, GUEST_RIP_INDEX
-		vmread rax, rax ;RIP
-		add rax, rcx ;调整后的RIP
-		mov ecx, GUEST_RIP_INDEX
-		vmwrite rcx, rax ;把调整后的RIP写入GUEST_RIP_INDEX FIELD
-		;模拟执行CPUID
+		vmread rcx, rcx
+		mov INSTRUCTION_LENGTH, ecx
+		
+	;	cmp EXIT_REASON, 0Ah
+	;jz HANDLE_CPUID
+		cmp EXIT_REASON, 1Fh
+	jz HANDLE_RDMSR
+		cmp EXIT_REASON, 20h
+	jz HANDLE_WRMSR
+
+		;以下是异常处理流程，没有EXIT_REASON命中
+		mov rsp, __RSP
+		push __RFLAGS
+		popfq
+		mov rcx, __RIP ;恢复GUEST的执行流，包括RIP/RSP和RFLAGS
+		mov DRIVER_RIP, rcx ;把RIP保存到全局DRIVER_RIP中准备jmp
+		mov rcx, __CR0
+		mov cr0, rcx
+		mov rcx, __CR3
+		mov cr3, rcx
+		mov rcx, __CR4
+		mov cr4, rcx ;恢复三个控制寄存器
 		mov rax, __RAX
-		mov rcx, __RCX ;恢复原来刚进入时的RAX和RCX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8,  __R8
+		mov r9,  __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有通用寄存器。由于不准备处理，所以没有任何值发生改动
+		;vmxoff
+		;int 3
+		jmp DRIVER_RIP ;注意不能用VMRESUME，否则会因为没有步进RIP导致无限次执行RIP对应的指令
+
+HANDLE_CPUID:
+		mov rcx, __RFLAGS
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, __RIP ;步进RIP		
+		mov rax, __RAX
+		mov rcx, __RCX ;恢复原来刚进入时的RAX, RCX和RDX
 		cpuid
 		mov __RAX, rax
 		mov __RBX, rbx
 		mov __RCX, rcx
-		mov __RDX, rdx ;CPUID可能会影响这四个寄存器
-		pushfq
-		pop rax ;别忘了保存最新的FLAGS寄存器
-		mov ecx, GUEST_RFLAGS_INDEX
-		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, __CR0
+		mov cr0, rcx
+		mov rcx, __CR3
+		mov cr3, rcx
+		mov rcx, __CR4
+		mov cr4, rcx ;恢复三个控制寄存器
 		mov rax, __RAX
 		mov rbx, __RBX
 		mov rcx, __RCX
@@ -185,16 +257,26 @@ EXTERN __RFLAGS: QWORD
 		mov r14, __R14
 		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
 		vmresume ; 继续
-NZ:
-		mov ecx, GUEST_RSP_INDEX
-		vmread rsp, rcx ;恢复虚拟机的RSP堆栈指针
-		mov ecx, GUEST_RFLAGS_INDEX
-		vmread rcx, rcx ;读取虚拟机的RFLAGS寄存器
-		push rcx ;注意此时操作的堆栈指针是原来GUEST的RSP
-		popfq ;恢复虚拟机的RFLAGS寄存器
+HANDLE_RDMSR:
+		mov rcx, __RFLAGS
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
 		mov ecx, GUEST_RIP_INDEX
-		vmread rcx, rcx ;恢复虚拟机的RIP指令指针
-		mov DRIVER_RIP, rcx ;保存VMXOFF后跳转地址
+		vmwrite rcx, __RIP ;步进RIP
+		mov rcx, __RCX ;恢复原来刚进入时的RAX, RCX和RDX
+		rdmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, __CR0
+		mov cr0, rcx
+		mov rcx, __CR3
+		mov cr3, rcx
+		mov rcx, __CR4
+		mov cr4, rcx ;恢复三个控制寄存器
 		mov rax, __RAX
 		mov rbx, __RBX
 		mov rcx, __RCX
@@ -209,9 +291,46 @@ NZ:
 		mov r12, __R12
 		mov r13, __R13
 		mov r14, __R14
-		mov r15, __R15 ;恢复所有通用寄存器。由于准备不处理，所以没有任何值发生改动
-		vmxoff
-		jmp DRIVER_RIP
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续
+HANDLE_WRMSR:
+		mov rcx, __RFLAGS
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, __RIP ;步进RIP
+		mov rax, __RAX
+		mov rcx, __RCX 
+		mov rdx, __RDX ;恢复原来刚进入时的RAX, RCX和RDX
+		wrmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, __CR0
+		mov cr0, rcx
+		mov rcx, __CR3
+		mov cr3, rcx
+		mov rcx, __CR4
+		mov cr4, rcx ;恢复三个控制寄存器
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续	
 	__vsm__hostEntry ENDP
 
 
