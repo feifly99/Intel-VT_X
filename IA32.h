@@ -3,7 +3,7 @@
 
 #include "base.h"
 
-extern VOID __vsm__trap();
+extern ULONG64 __vsm__trap();
 extern VOID __vsm__trap2();
 extern VOID __vsm__breakStack(INT a, INT b);
 extern VOID __vsm__SetGlobalDebugWindow();
