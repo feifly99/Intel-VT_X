@@ -2,7 +2,7 @@
 
     已经成功实现基本VT框架，支持对CPUID和RDMSR指令的拦截
     平稳运行在物理真实硬件环境
-    INTEL® Core i7 - 9750H  Coffee Lake架构CPU
+    INTEL® Core™ i7 - 9750H  Coffee Lake架构CPU
     Windows 10 x64 - 22H2
     中，无异常表现
 
@@ -21,7 +21,7 @@
     因为VS2022 x64模式不允许声明naked裸函数
 
     硬件架构 
-    INTEL® Core i7 - 9750H  Coffee Lake架构CPU
+    INTEL® Core™ i7 - 9750H  Coffee Lake架构CPU
     Windows 10 x64 - 22H2
     
   VT练习
