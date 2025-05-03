@@ -9,6 +9,7 @@
 ULONG_PTR bugCheck = 0;
 ULONG64 GlobalDebugWindow = 0xBBBBBBBB;
 
+ULONG64 DRIVER_RSP = 0;
 ULONG64 DRIVER_RIP = 0;
 
 ULONG64 tempFLAGS = 0;
@@ -194,7 +195,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU));
 	print(totalCpuCount);
 	SIZE_T regionSizeNeeded = 0x1000;
-	ULONG vmcsIdentifier = (ULONG)1;
+	ULONG vmcsIdentifier = (ULONG)4;
 	//初始化虚拟CPU的属性
 	for (size_t j = 0; j < totalCpuCount; j++)
 	{
@@ -212,12 +213,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		tempVmcsRegion = MmGetPhysicalAddress(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
 		vCpus[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
 
-		vCpus[j].virtualGuestStackSize = 0x5000;
+		vCpus[j].virtualGuestStackSize = 0x101000;
 		vCpus[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualGuestStackSize, 'gstk');
 		RtlZeroMemory(vCpus[j].virtualGuestStack, vCpus[j].virtualGuestStackSize);
 		vCpus[j].virtualGuestStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualGuestStack + vCpus[j].virtualGuestStackSize - 0x1000);
 
-		vCpus[j].virtualHostStackSize = 0x5000;
+		vCpus[j].virtualHostStackSize = 0x101000;
 		vCpus[j].virtualHostStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualHostStackSize, 'hstk');
 		RtlZeroMemory(vCpus[j].virtualHostStack, vCpus[j].virtualHostStackSize);
 		vCpus[j].virtualHostStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualHostStack + vCpus[j].virtualHostStackSize - 0x1000);
