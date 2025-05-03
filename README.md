@@ -12,11 +12,6 @@
     并且不会被HOST接管直接蓝屏，代码：SYSTEM_THREAD_EXCEPTION_NOT_HANDLED
     原因：0xC000001D -> 处理器不支持的指令
 
-    已经实现了最小的虚拟化环境
-    驱动能正常加载、卸载和删除
-    能拦截CPUID，尽管什么也没做
-    还有RDMSR和WRMSR需要拦截
-
     现在能进入HOST_ENTRY了！HOST_ENTRY必须用汇编写，不能用C写
     因为VS2022 x64模式不允许声明naked裸函数
 
