@@ -129,6 +129,7 @@ EXTERN INSTRUCTION_LENGTH: DWORD
 		ret
 	__vsm__trap ENDP
 
+	//-----this code is buggy-----//
 	__vsm__hostEntry PROC
 		;保存调用方所有通用目的寄存器的状态.
 		;当前RSP = 外部分配的RSP.
@@ -332,6 +333,7 @@ HANDLE_WRMSR:
 		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
 		vmresume ; 继续	
 	__vsm__hostEntry ENDP
+	//-----this code is buggy-----//
 
 
 
