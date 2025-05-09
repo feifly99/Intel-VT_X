@@ -6,14 +6,18 @@
 #pragma warning(disable: 6011)
 #pragma warning(disable: 4996)
 
+ULONG_PTR debugPrint = 0;
+
 ULONG_PTR bugCheck = 0;
-ULONG64 GlobalDebugWindow = 0xBBBBBBBB;
+ULONG64 GlobalDebugWindow = 0;
+ULONG64 IS_CAPABILITY_MODE = 0;
 
 ULONG64 DRIVER_RSP = 0;
 ULONG64 DRIVER_RIP = 0;
 
 ULONG64 tempFLAGS = 0;
 
+ULONG GUEST_FS_BASE_INDEX = GUEST_FS_BASE_ADDRESS;
 ULONG GUEST_CR0_INDEX = GUEST_CR0;
 ULONG GUEST_CR3_INDEX = GUEST_CR3;
 ULONG GUEST_CR4_INDEX = GUEST_CR4;
@@ -47,11 +51,12 @@ ULONG64 __R12	 = 0;
 ULONG64 __R13	 = 0;
 ULONG64 __R14	 = 0;
 ULONG64 __R15	 = 0;
-ULONG EXIT_REASON = 0;
+USHORT EXIT_REASON = 0;
 ULONG INSTRUCTION_LENGTH = 0;
 
-int times = 0;
-int mss = 0x4F1C7752;
+CONST CHAR CPUID_STRING[50] = "CALL_CPUID";
+CONST CHAR RDMSR_STRING[50] = "CALL_RDMSR";
+CONST CHAR WRMSR_STRING[50] = "CALL_WRMSR";
 
 #define print(s) \
 do\
@@ -178,22 +183,13 @@ VOID getSegementRegisterAttributes(
 NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 {
 	bugCheck = (ULONG_PTR)KeBugCheckEx;
+	debugPrint = (ULONG_PTR)DbgPrint;
 
 	UNREFERENCED_PARAMETER(regPath);
 	driverObject->DriverUnload = driverUnload;
-
-	if (__vasm__isVMXOperationsSupported() == 1)
-	{
-		DbgPrint("此CPU架构支持VMXE模式！\n");
-	}
-	else
-	{
-		DbgPrint("此CPU架构不支持VMXE模式！\n");
-	}
 	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
 	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
 	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU));
-	print(totalCpuCount);
 	SIZE_T regionSizeNeeded = 0x1000;
 	ULONG vmcsIdentifier = (ULONG)4;
 	//初始化虚拟CPU的属性
@@ -247,11 +243,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	/*3.VM-Execution Control字段*/
 	__vmx_vmwrite(VECF_PIN_BASED_VM_EXECUTION_CONTROL, 0x16ul); //物理机 0x16ul
 	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x84006172ul); //物理机 0x4006172ul
-	__vmx_vmwrite(VECF_SECONDARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x101008ul); //物理机 0x4006172ul
-	/*PVOID msrBitmap = ExAllocatePoolWithTag(NonPagedPool, 0x4000, 'msrs');
-	memset(msrBitmap, 0xFF, 0x4000);
-	PHYSICAL_ADDRESS msrBitmapPhy = MmGetPhysicalAddress(msrBitmap);
-	__vmx_vmwrite(VECF_MSR_BITMAPS, msrBitmapPhy.QuadPart);*/
+	__vmx_vmwrite(VECF_SECONDARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x101008ul); //物理机 0x101008ul
+	//PVOID msrBitmap = ExAllocatePoolWithTag(NonPagedPool, 0x3000, 'msrs');
+	//RtlZeroMemory(msrBitmap, 0x3000);
+	//PHYSICAL_ADDRESS msrBitmapPhy = MmGetPhysicalAddress(msrBitmap);
+	//__vmx_vmwrite(VECF_MSR_BITMAPS, msrBitmapPhy.QuadPart);
 	/*4.Host-State Area字段*/
 	SRA h_cs, h_ss, h_ds, h_es, h_fs, h_gs, h_ldtr, h_tr;
 	getSegementRegisterAttributes('cs', __vsm__getCS(), 0, &h_cs);
@@ -274,19 +270,19 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	__vmx_vmwrite(HOST_FS_SELECTOR, h_fs.selector & 0xFFF8);
 	__vmx_vmwrite(HOST_GS_SELECTOR, h_gs.selector & 0xFFF8);
 	__vmx_vmwrite(HOST_TR_SELECTOR, h_tr.selector & 0xFFF8);
-	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE)); //__readmsr(IA32_FS_BASE)
 	__vmx_vmwrite(HOST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
 	__vmx_vmwrite(HOST_TR_BASE_ADDRESS, (PVOID)h_tr.baseAddress);
 	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
 	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());
 	/*5.Guest-State Area字段*/
 	SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
-	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs);
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs); //1
 	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
 	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
 	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
-	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs);
-	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs);
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs); //0
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs); //0
 	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 1, &g_ldtr);
 	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &g_tr);
 	//选择子
@@ -327,7 +323,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	__vmx_vmwrite(GUEST_RIP, (PVOID)__vsm__guestEntry);
 
 	__vsm__vmlaunchSaveRegisters();
-	//如果vmlaunch失败会以2222AAAA蓝屏，详见汇编实现
+
+	__vsm__trap();
 
 	return STATUS_SUCCESS;	
 }
