@@ -1,6 +1,9 @@
 # Intel-VT_X
     
     已经成功实现基本VT框架，支持对CPUID和RDMSR指令的拦截
+    全程没有vmxoff
+    因为遇到非CPUID/RDMSR/WRMSR指令会自动int 3断下或者主动蓝屏
+    
     平稳运行在物理真实硬件环境
     INTEL® Core™ i7 - 9750H  Coffee Lake架构CPU
     Windows 10 x64 - 22H2
