@@ -1,11 +1,14 @@
+EXTERN debugPrint: QWORD
 EXTERN bugCheck: QWORD
 EXTERN GlobalDebugWindow: QWORD
+EXTERN IS_CAPABILITY_MODE: QWORD
 
 EXTERN DRIVER_RSP  : QWORD
 EXTERN DRIVER_RIP  : QWORD
 
 EXTERN tempFLAGS: QWORD
 
+EXTERN GUEST_FS_BASE_INDEX: DWORD
 EXTERN GUEST_CR0_INDEX: DWORD
 EXTERN GUEST_CR3_INDEX: DWORD
 EXTERN GUEST_CR4_INDEX: DWORD
@@ -39,8 +42,48 @@ EXTERN __R13   : QWORD
 EXTERN __R14   : QWORD
 EXTERN __R15   : QWORD
 EXTERN __RFLAGS: QWORD
-EXTERN EXIT_REASON:	DWORD
+EXTERN EXIT_REASON:	WORD
 EXTERN INSTRUCTION_LENGTH: DWORD
+
+EXTERN CPUID_STRING: QWORD
+EXTERN RDMSR_STRING: QWORD
+EXTERN WRMSR_STRING: QWORD
+
+PUSHGQ MACRO
+	push rax
+	push rbx
+	push rcx
+	push rdx
+	push rsi
+	push rdi
+	push rbp
+	push r8
+	push r9
+	push r10
+	push r11
+	push r12
+	push r13
+	push r14
+	push r15
+ENDM
+
+POPGQ MACRO
+	pop r15
+	pop r14
+	pop r13
+	pop r12
+	pop r11
+	pop r10
+	pop r9
+	pop r8
+	pop rbp
+	pop rdi
+	pop rsi
+	pop rdx
+	pop rcx
+	pop rbx
+	pop rax
+ENDM
 
 .code
 	
@@ -67,10 +110,12 @@ EXTERN INSTRUCTION_LENGTH: DWORD
 		ret
 	__vasm__setCR4VMXEBit ENDP
 
-	__vsm__SetGlobalDebugWindow PROC
-		mov GlobalDebugWindow, 0EEEEEEEEh
+	__vsm__testX2APICmode PROC
+		mov eax, 1
+		cpuid
+		mov eax, ecx
 		ret
-	__vsm__SetGlobalDebugWindow ENDP
+	__vsm__testX2APICmode ENDP
 
 	__vsm__vmlaunchSaveRegisters PROC
 		mov __RAX, rax
@@ -89,12 +134,17 @@ EXTERN INSTRUCTION_LENGTH: DWORD
 		mov __R13, r13
 		mov __R14, r14
 		mov __R15, r15
+		mov rcx, cr0
+		mov __CR0, rcx
+		mov rcx, cr3
+		mov __CR3, rcx
+		mov rcx, cr4
+		mov __CR4, rcx
 		pushfq
 		pop rax
 		mov __RFLAGS, rax
 		mov rax, qword ptr [rsp]
 		mov DRIVER_RIP, rax
-		add rsp, 8
 		vmlaunch
 		mov ecx, 2222AAAAh
 		call bugCheck
@@ -105,6 +155,12 @@ EXTERN INSTRUCTION_LENGTH: DWORD
 		mov rax, __RFLAGS
 		push rax
 		popfq
+		mov rax, __CR0
+		mov cr0, rax
+		mov rax, __CR3
+		mov cr3, rax
+		mov rax, __CR4
+		mov cr4, rax
 		mov rax, __RAX
 		mov rbx, __RBX
 		mov rcx, __RCX
@@ -121,238 +177,9 @@ EXTERN INSTRUCTION_LENGTH: DWORD
 		mov r13, __R13
 		mov r14, __R14
 		mov r15, __R15
+		add rsp, 8
 		jmp DRIVER_RIP
 	__vsm__guestEntry ENDP
-
-	__vsm__trap PROC
-		mov eax, 1
-		rdmsr
-		ret
-	__vsm__trap ENDP
-
-	__vsm__hostEntry PROC
-		;保存调用方所有通用目的寄存器的状态.
-		;当前RSP = 外部分配的RSP.
-		;当前RIP = __vsm__hostEntry.
-		;当前RFLAGS = 10h，因为LOAD HOST STATE后，RFLAGS默认清零，除了第一位保留位.
-		push rax
-		push rbx
-		push rcx
-		push rdx
-		push rsi
-		push rdi
-		push rbp
-		push r8
-		push r9
-		push r10
-		push r11
-		push r12
-		push r13
-		push r14
-		push r15
-		
-		mov ecx, GUEST_CR0_INDEX
-		vmread rcx, rcx
-		push rcx
-		
-		mov ecx, GUEST_CR3_INDEX
-		vmread rcx, rcx
-		push rcx
-		
-		mov ecx, GUEST_CR4_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		mov ecx, GUEST_RSP_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		mov ecx, GUEST_RIP_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		mov ecx, GUEST_RFLAGS_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		mov ecx, VM_EXIT_REASON_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
-		vmread rcx, rcx
-		push rcx
-
-		;$ == HOST_RSP
-		;$ + 0h -> LENGTH
-		;$ + 8h -> REASON
-		;$ + 10h -> RFLAGS
-		;$ + 18h -> RIP
-		;$ + 20h -> RSP
-		;$ + 28h -> CR4
-		;$ + 30h -> CR3
-		;$ + 38h -> CR0
-		;$ + 40h -> r15
-		;$ + 48h -> r14
-		;$ + 50h -> r13
-		;$ + 58h -> r12
-		;$ + 60h -> r11
-		;$ + 68h -> r10
-		;$ + 70h -> r9
-		;$ + 78h -> r8
-		;$ + 80h -> rbp
-		;$ + 88h -> rdi
-		;$ + 90h -> rsi
-		;$ + 98h -> rdx
-		;$ + 100h -> rcx
-		;$ + 108h -> rbx
-		;$ + 110h -> rax
-
-		cmp qword ptr [rsp + 8h], 0Ah
-	jz HANDLE_CPUID
-		cmp qword ptr [rsp + 8h], 1Fh
-	jz HANDLE_RDMSR
-
-		;以下是异常处理流程，没有EXIT_REASON命中
-		add rsp, 10h ;跳过LENGTH和REASON字段，用不上
-		popfq ;把当前的RFLAGS置为GUEST的RFLAGS
-		pop rbx ;保存GUEST RIP
-		pop rax ;保存GUEST RSP
-		pop r13 
-		mov cr4, r13 ;赋值CR4
-		pop r13
-		mov cr3, r13 ;赋值CR3
-		pop r13
-		mov cr0, r13 ;赋值CR0
-		pop r15
-		pop r14
-		pop r13
-		pop r12
-		pop r11
-		pop r10
-		pop r9
-		pop r8
-		pop rbp
-		pop rdi
-		pop rsi
-		pop rdx
-		pop rcx
-		mov DRIVER_RIP, rbx
-		mov DRIVER_RSP, rax
-		pop rbx
-		pop rax ;恢复所有通用寄存器。由于不准备处理，所以没有任何值发生改动
-		mov rsp, DRIVER_RSP
-	jmp DRIVER_RIP ;注意不能用VMRESUME，否则会因为没有步进RIP导致无限次执行RIP对应的指令
-
-HANDLE_CPUID:
-		mov rcx, qword ptr [rsp + 10h]
-		push rcx
-		popfq ;恢复原来刚进入时的RFLAGS
-
-		mov rax, qword ptr [rsp + 110h]
-		mov rcx, qword ptr [rsp + 100h] ;恢复原来刚进入时必要状态执行指令
-		cpuid ;模拟执行指令
-		mov qword ptr [rsp + 110h], rax
-		mov qword ptr [rsp + 108h], rbx
-		mov qword ptr [rsp + 100h], rcx
-		mov qword ptr [rsp + 98h], rdx ;把结果写回HOST临时栈
-
-		mov rcx, qword ptr [rsp + 0h] ;获取指令长度
-		mov rax, qword ptr [rsp + 18h] ;获取指令地址
-		add rax, rcx ;步进RIP
-		mov ecx, GUEST_RIP_INDEX
-		vmwrite rcx, rax ;写回步进后的RIP
-
-		add rsp, 40h ;跳过CR0到LENGTH这些用不上的字段
-		;这是在假设CPUID指令不会改变控制寄存器
-		pop r15
-		pop r14
-		pop r13
-		pop r12
-		pop r11
-		pop r10
-		pop r9
-		pop r8
-		pop rbp
-		pop rdi
-		pop rsi
-		pop rdx
-		pop rcx
-		pop rbx
-		pop rax ;恢复所有通用寄存器。由于不准备处理，所以没有任何值发生改动
-		vmresume ;继续
-
-HANDLE_RDMSR:
-		mov rcx, qword ptr [rsp + 10h]
-		push rcx
-		popfq ;恢复原来刚进入时的RFLAGS
-
-		mov rcx, qword ptr [rsp + 100h] ;恢复原来刚进入时必要状态执行指令
-		rdmsr ;模拟执行指令
-		mov qword ptr [rsp + 110h], rax
-		mov qword ptr [rsp + 98h], rdx ;把结果写回HOST临时栈
-
-		mov rcx, qword ptr [rsp + 0h] ;获取指令长度
-		mov rax, qword ptr [rsp + 18h] ;获取指令地址
-		add rax, rcx ;步进RIP
-		mov ecx, GUEST_RIP_INDEX
-		vmwrite rcx, rax ;写回步进后的RIP
-
-		add rsp, 40h ;跳过CR0到LENGTH这些用不上的字段
-		;这是在假设RDMSR指令不会改变控制寄存器
-		pop r15
-		pop r14
-		pop r13
-		pop r12
-		pop r11
-		pop r10
-		pop r9
-		pop r8
-		pop rbp
-		pop rdi
-		pop rsi
-		pop rdx
-		pop rcx
-		pop rbx
-		pop rax ;恢复所有通用寄存器。由于不准备处理，所以没有任何值发生改动
-		vmresume ;继续
-
-	__vsm__hostEntry ENDP
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 	__vsm__getCR0 PROC
 		mov rax, cr0
@@ -395,7 +222,6 @@ HANDLE_RDMSR:
 		ret
 	__vsm__getRFLAGS ENDP
 	
-	;selectors
 	__vsm__getCS PROC
 		mov eax, cs
 		ret
@@ -480,7 +306,388 @@ HANDLE_RDMSR:
 		nop
 		nop
 		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
 		ret
 	__vsm__NOP ENDP
+
+	__vsm__trap PROC
+		mov ecx, 830h
+		rdmsr
+		wrmsr
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		nop
+		;vmcall
+		ret
+	__vsm__trap ENDP
+	
+	__vsm__trap2 PROC
+		mov DRIVER_RSP, rsp
+		vmcall
+		ret
+	__vsm__trap2 ENDP
+
+	__vsm__hostEntry PROC
+					sub rsp, 300h
+					push rsp
+					push rax
+					push rbx
+					push rcx
+					push rdx
+					push rsi
+					push rdi
+					push rbp
+					push r8
+					push r9
+					push r10
+					push r11
+					push r12
+					push r13
+					push r14
+					push r15
+					mov ecx, GUEST_CR0_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, GUEST_CR3_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, GUEST_CR4_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, GUEST_RSP_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmread rcx, rcx
+					push rcx		
+					mov ecx, GUEST_RFLAGS_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, VM_EXIT_REASON_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+					vmread rcx, rcx
+					push rcx
+
+					mov ax, word ptr [rsp + 8h]
+					mov EXIT_REASON, ax
+
+					mov ecx, GUEST_FS_BASE_INDEX
+					vmread rcx, rcx
+					test rcx, rcx
+jnz	CAPABILITY_MODE
+					cmp EXIT_REASON, 10
+				jz  CPUID_EXIT
+					cmp EXIT_REASON, 11
+				jz  GETSEC_EXIT
+					cmp EXIT_REASON, 13
+				jz  INVD_EXIT
+					cmp EXIT_REASON, 31
+				jz  RDMSR_EXIT
+					cmp EXIT_REASON, 32
+				jz  WRMSR_EXIT
+					cmp EXIT_REASON, 50
+				jz  INVEPT_EXIT
+					cmp EXIT_REASON, 53
+				jz  INVVPID_EXIT
+					cmp EXIT_REASON, 55
+				jz  XSETBV_EXIT
+			GETSEC_EXIT:
+			INVD_EXIT:
+			INVEPT_EXIT:
+			INVVPID_EXIT:
+			XSETBV_EXIT:
+					int 3
+					mov rcx, qword ptr [rsp + 18h]
+					mov rcx, qword ptr [rcx]
+					call bugCheck
+					vmxoff 
+			CPUID_EXIT:
+					cmp qword ptr [rsp + 0B0h], 22224444h
+			jz HOOK_CPUID
+					mov rax, qword ptr [rsp + 0B0h]
+					mov rcx, qword ptr [rsp + 0A0h]
+					cpuid
+					mov qword ptr [rsp + 0B0h], rax
+					mov qword ptr [rsp + 0A8h], rbx
+					mov qword ptr [rsp + 0A0h], rcx
+					mov qword ptr [rsp + 098h], rdx
+					jmp STEP_RIP
+			HOOK_CPUID:
+					mov qword ptr [rsp + 0B0h], 0FEFEFEFEh
+					mov qword ptr [rsp + 0A8h], 0FEFEFEFEh
+					mov qword ptr [rsp + 0A0h], 0FEFEFEFEh
+					mov qword ptr [rsp + 098h], 0FEFEFEFEh
+			STEP_RIP:
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+					add rsp, 40h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+			RDMSR_EXIT:
+					mov rcx, qword ptr [rsp + 0A0h]
+					rdmsr
+					mov qword ptr [rsp + 0B0h], rax
+					mov qword ptr [rsp + 98h], rdx
+
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					add rsp, 40h
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+			WRMSR_EXIT:
+					mov rax, qword ptr [rsp + 0B0h]
+					mov rcx, qword ptr [rsp + 0A0h]
+					mov rdx, qword ptr [rsp + 98h]
+					wrmsr
+		
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+	
+					add rsp, 40h
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+CAPABILITY_MODE:
+					cmp EXIT_REASON, 10
+				jz  CPUID_EXIT_CAPABILITY
+					cmp EXIT_REASON, 11
+				jz  GETSEC_EXIT_CAPABILITY
+					cmp EXIT_REASON, 13
+				jz  INVD_EXIT_CAPABILITY
+					cmp EXIT_REASON, 31
+				jz  RDMSR_EXIT_CAPABILITY
+					cmp EXIT_REASON, 32
+				jz  WRMSR_EXIT_CAPABILITY
+					cmp EXIT_REASON, 50
+				jz  INVEPT_EXIT_CAPABILITY
+					cmp EXIT_REASON, 53
+				jz  INVVPID_EXIT_CAPABILITY
+					cmp EXIT_REASON, 55
+				jz  XSETBV_EXIT_CAPABILITY
+			GETSEC_EXIT_CAPABILITY:
+			INVD_EXIT_CAPABILITY:
+			INVEPT_EXIT_CAPABILITY:
+			INVVPID_EXIT_CAPABILITY:
+			XSETBV_EXIT_CAPABILITY:
+					int 3
+					mov rcx, qword ptr [rsp + 18h]
+					mov rcx, qword ptr [rcx]
+					call bugCheck
+					vmxoff 
+			CPUID_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rax, qword ptr [rsp + 0B0h]
+					mov rcx, qword ptr [rsp + 0A0h]
+					cpuid
+					mov qword ptr [rsp + 0B0h], rax
+					mov qword ptr [rsp + 0A8h], rbx
+					mov qword ptr [rsp + 0A0h], rcx
+					mov qword ptr [rsp + 098h], rdx
+
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					add rsp, 40h
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+			RDMSR_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rcx, qword ptr [rsp + 0A0h]
+					rdmsr
+					mov qword ptr [rsp + 0B0h], rax
+					mov qword ptr [rsp + 98h], rdx
+
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					add rsp, 40h
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+			WRMSR_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rax, qword ptr [rsp + 0B0h]
+					mov rcx, qword ptr [rsp + 0A0h]
+					mov rdx, qword ptr [rsp + 98h]
+					wrmsr
+		
+					mov rcx, qword ptr [rsp + 0h]
+					mov rax, qword ptr [rsp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+	
+					add rsp, 40h
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					add rsp, 308h
+					vmresume
+	__vsm__hostEntry ENDP
 
 END
