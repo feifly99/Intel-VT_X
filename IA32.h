@@ -4,7 +4,7 @@
 #include "base.h"
 
 extern ULONG64 __vsm__trap();
-extern VOID __vsm__trap2();
+extern ULONG64 __vsm__trap2();
 extern VOID __vsm__breakStack(INT a, INT b);
 extern VOID __vsm__SetGlobalDebugWindow();
 extern VOID __vsm__vmlaunchSaveRegisters();
@@ -30,6 +30,7 @@ extern ULONG64 __vsm__guestEntry();
 extern ULONG64 __vsm__hostEntry();
 extern ULONG64 inline __vsm__NOP();
 extern VOID __vsm__INT3();
+extern ULONG64 __vsm__testX2APICmode();
 
 VOID __fastcall runRoutineForAllCpus(
 	IN VOID(__fastcall* eachCpuRoutine)(PVOID),
