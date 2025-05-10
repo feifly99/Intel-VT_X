@@ -66,10 +66,28 @@ do\
 }while(0)
 
 PVCPU vCpus = NULL;
+KAFFINITY currentVMCSCpuIndex = 1;
 
 VOID driverUnload(PDRIVER_OBJECT driverObject)
 {
 	UNREFERENCED_PARAMETER(driverObject);
+	KeSetSystemAffinityThread((KAFFINITY)(1 << currentVMCSCpuIndex));
+	__vsm__vmoffSaveRegisters(); 
+	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		ExFreePool(vCpus[j].virtualGuestStack); 
+		vCpus[j].virtualGuestStack = NULL;
+		ExFreePool(vCpus[j].virtualHostStack); 
+		vCpus[j].virtualHostStack = NULL;
+		ExFreePool(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS); 
+		vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
+		ExFreePool(vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS); 
+		vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
+	}
+	ExFreePool(vCpus);
+	vCpus = NULL;
+
 	return;
 }
 
@@ -191,7 +209,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
 	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU));
 	SIZE_T regionSizeNeeded = 0x1000;
-	ULONG vmcsIdentifier = (ULONG)4;
+	ULONG vmcsIdentifier = (ULONG)1;
 	//初始化虚拟CPU的属性
 	for (size_t j = 0; j < totalCpuCount; j++)
 	{
@@ -231,7 +249,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		__vmx_on(&vCpus[j].VMX_ON_REGION_PHYSICAL_ADDRESS);
 	}
 	//选择一个虚拟CPU的VMCS作为`current VMCS`
-	KAFFINITY currentVMCSCpuIndex = 1;
 	KeSetSystemAffinityThread((KAFFINITY)(1 << currentVMCSCpuIndex));
 	__vmx_vmclear(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
 	__vmx_vmptrld(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
@@ -323,8 +340,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	__vmx_vmwrite(GUEST_RIP, (PVOID)__vsm__guestEntry);
 
 	__vsm__vmlaunchSaveRegisters();
-
-	__vsm__trap();
 
 	return STATUS_SUCCESS;	
 }
