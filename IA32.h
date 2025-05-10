@@ -4,10 +4,11 @@
 #include "base.h"
 
 extern ULONG64 __vsm__trap();
-extern ULONG64 __vsm__trap2();
+extern ULONG64 __vsm__vmcall();
 extern VOID __vsm__breakStack(INT a, INT b);
 extern VOID __vsm__SetGlobalDebugWindow();
 extern VOID __vsm__vmlaunchSaveRegisters();
+extern VOID __vsm__vmoffSaveRegisters();
 extern ULONG64 __vasm__isVMXOperationsSupported();
 extern ULONG64 __vasm__setCR4VMXEBit();
 extern ULONG64 __vsm__getCR4();
