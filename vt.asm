@@ -368,13 +368,38 @@ ENDM
 		nop
 		;vmcall
 		ret
-	__vsm__trap ENDP
-	
-	__vsm__trap2 PROC
-		mov DRIVER_RSP, rsp
-		vmcall
-		ret
-	__vsm__trap2 ENDP
+	__vsm__trap ENDP	
+
+	__vsm__vmoffSaveRegisters PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov __RSI, rsi
+		mov __RDI, rdi
+		mov __RSP, rsp
+		mov __RBP, rbp
+		mov __R8, r8
+		mov __R9, r9
+		mov __R10, r10
+		mov __R11, r11
+		mov __R12, r12
+		mov __R13, r13
+		mov __R14, r14
+		mov __R15, r15
+		mov rcx, cr0
+		mov __CR0, rcx
+		mov rcx, cr3
+		mov __CR3, rcx
+		mov rcx, cr4
+		mov __CR4, rcx
+		pushfq
+		pop rax
+		mov __RFLAGS, rax
+		mov rax, qword ptr [rsp]
+		mov DRIVER_RIP, rax
+		vmcall ;for execute vmxoff under root-operation mode
+	__vsm__vmoffSaveRegisters ENDP
 
 	__vsm__hostEntry PROC
 					sub rsp, 300h
@@ -432,6 +457,8 @@ jnz	CAPABILITY_MODE
 				jz  GETSEC_EXIT
 					cmp EXIT_REASON, 13
 				jz  INVD_EXIT
+					cmp EXIT_REASON, 18
+				jz  VMCALL_EXIT
 					cmp EXIT_REASON, 31
 				jz  RDMSR_EXIT
 					cmp EXIT_REASON, 32
@@ -556,6 +583,35 @@ jnz	CAPABILITY_MODE
 
 					add rsp, 308h
 					vmresume
+			VMCALL_EXIT:
+					mov rax, __RFLAGS
+					push rax
+					popfq
+					mov rax, __CR0
+					mov cr0, rax
+					mov rax, __CR3
+					mov cr3, rax
+					mov rax, __CR4
+					mov cr4, rax
+					mov rax, __RAX
+					mov rbx, __RBX
+					mov rcx, __RCX
+					mov rdx, __RDX
+					mov rsi, __RSI
+					mov rdi, __RDI
+					mov rsp, __RSP
+					mov rbp, __RBP
+					mov r8, __R8
+					mov r9, __R9
+					mov r10, __R10
+					mov r11, __R11
+					mov r12, __R12
+					mov r13, __R13
+					mov r14, __R14
+					mov r15, __R15
+					add rsp, 8
+					vmxoff
+					jmp DRIVER_RIP
 CAPABILITY_MODE:
 					cmp EXIT_REASON, 10
 				jz  CPUID_EXIT_CAPABILITY
