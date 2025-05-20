@@ -1,9 +1,8 @@
 # Intel-VT_X
 
-    新加的两个纯单核的文件，只需要修改Purely_entry.c的currentVMCSCpuIndex就可以
+    新加的两个纯单核的文件
+    只要需要修改Purely_entry.c的currentVMCSCpuIndex就可以
     对指定核心虚拟化
-    如果你有12个核心，那写12个驱动就可以全部虚拟化
-    虽然路子比较野，但是确实能稳定运行！
     
     已经成功实现基本VT框架，支持对CPUID/RDMSR/WRMSR指令的拦截
     增加了vmxoff逻辑，补充了驱动卸载并释放了相关内存
