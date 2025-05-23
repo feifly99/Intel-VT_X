@@ -38,21 +38,6 @@ extern ULONG64 __vsm__NOP();
 extern VOID __vsm__INT3();
 extern ULONG64 __vsm__testX2APICmode();
 
-VOID __fastcall runRoutineForAllCpus(
-	IN VOID(__fastcall* eachCpuRoutine)(PVOID),
-	IN PVOID args
-);
-
-VOID __fastcall runRoutineAtPreciseCpu(
-	IN VOID(__fastcall* routine)(PVOID),
-	IN PVOID args,
-	IN ULONG targetCpuIndex
-);
-
-VOID __fastcall checkCurrCpuIndex(
-	IN PVOID args
-);
-
 VOID ExFreeMemory(
 	OUT PVOID* mem
 );
