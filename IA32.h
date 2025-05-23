@@ -3,12 +3,17 @@
 
 #include "base.h"
 
+#define EACH_CPU_REGS_COUNT 21
+
 extern ULONG64 __vsm__trap();
 extern ULONG64 __vsm__vmcall();
+extern VOID __vsm__CLI();
+extern VOID __vsm__STI();
+extern VOID __vsm__checkRSPaligned();
 extern VOID __vsm__breakStack(INT a, INT b);
 extern VOID __vsm__SetGlobalDebugWindow();
 extern VOID __vsm__vmlaunchSaveRegisters();
-extern VOID __vsm__vmoffSaveRegisters();
+extern VOID __vsm__vmxoffSaveRegisters();
 extern ULONG64 __vasm__isVMXOperationsSupported();
 extern ULONG64 __vasm__setCR4VMXEBit();
 extern ULONG64 __vsm__getCR4();
@@ -29,7 +34,7 @@ extern ULONG __vsm__getIDTlimit();
 extern ULONG64 __vsm__vmLaunch();
 extern ULONG64 __vsm__guestEntry();
 extern ULONG64 __vsm__hostEntry();
-extern ULONG64 inline __vsm__NOP();
+extern ULONG64 __vsm__NOP();
 extern VOID __vsm__INT3();
 extern ULONG64 __vsm__testX2APICmode();
 
@@ -51,6 +56,14 @@ VOID __fastcall checkCurrCpuIndex(
 VOID ExFreeMemory(
 	OUT PVOID* mem
 );
+
+typedef struct _SEGEMENT_REGISTER_ATTRIBUTES
+{
+	USHORT selector;
+	ULONG segementLimit;
+	ULONG_PTR baseAddress;
+	ULONG accessRight;
+}SRA, * PSRA;
 
 typedef enum _SEGEMENT_TYPE
 {
@@ -77,6 +90,7 @@ typedef struct _VIRTUAL_CPU_STRUCT
 	PVOID virtualHostStack;
 	SIZE_T virtualHostStackSize;
 	PVOID virtualHostStackBottom;
+	ULONG64 regs[EACH_CPU_REGS_COUNT];
 }VCPU, *PVCPU;
 
 typedef enum _IA32_INDEXES
