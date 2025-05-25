@@ -62,6 +62,17 @@ VOID getSegementRegisterAttributes(
 	return;
 }
 
+ULONG_PTR virtualOff(ULONG_PTR arg)
+{
+	UNREFERENCED_PARAMETER(arg);
+	ULONG j = KeGetCurrentProcessorNumber();
+	KeSetSystemAffinityThread(1ull << j);
+
+	__vsm__vmxoffSaveRegisters();
+
+	return 0;
+}
+
 ULONG_PTR virtualization(ULONG_PTR arg)
 {
 	UNREFERENCED_PARAMETER(arg);
@@ -168,19 +179,7 @@ ULONG_PTR virtualization(ULONG_PTR arg)
 VOID driverUnload(PDRIVER_OBJECT driverObject)
 {
 	UNREFERENCED_PARAMETER(driverObject);
-	KeSetSystemAffinityThread((KAFFINITY)(1 << 0));
-	__vsm__vmxoffSaveRegisters();
-
-	ExFreePool(vCpu->virtualGuestStack);
-	vCpu->virtualGuestStack = NULL;
-	ExFreePool(vCpu->virtualHostStack);
-	vCpu->virtualHostStack = NULL;
-	ExFreePool(vCpu->VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
-	vCpu->VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
-	ExFreePool(vCpu->VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS);
-	vCpu->VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
-	ExFreePool(vCpu);
-	vCpu = NULL;
+	KeIpiGenericCall(virtualOff, 0);
 
 	return;
 }
