@@ -180,7 +180,22 @@ VOID driverUnload(PDRIVER_OBJECT driverObject)
 {
 	UNREFERENCED_PARAMETER(driverObject);
 	KeIpiGenericCall(virtualOff, 0);
-
+	KeSetSystemAffinityThread(1ull << 0);
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		ExFreePool(vCpu[j].virtualGuestStack);
+		vCpu[j].virtualGuestStack = NULL;
+		ExFreePool(vCpu[j].virtualHostStack);
+		vCpu[j].virtualHostStack = NULL;
+		ExFreePool(vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
+		ExFreePool(vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
+	}
+	ExFreePool(vCpu);
+	vCpu = NULL;
+	ExFreePool(PER_CPU_REGS);
+	PER_CPU_REGS = NULL;
 	return;
 }
 
