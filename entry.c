@@ -1,5 +1,4 @@
 #include "IA32.h"
-#include "DT.h"
 
 #pragma warning(disable: 28182)
 #pragma warning(disable: 6387)
@@ -38,111 +37,32 @@ do\
 VOID getSegementRegisterAttributes(
 	IN SEGEMENT_TYPE type,
 	IN ULONG64 selector,
-	IN UCHAR usable,
+	IN UCHAR unusable,
 	IN OUT SRA* sra
 )
 {
-	if (type == 'cs' || type == 'ss' || type == 'ds' || type == 'es')
-	{
-		ULONG_PTR GDTbase = __vsm__getGDTbase();
-		ULONG64 index = selector >> 3;
-		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
-		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
-		sra->selector = (USHORT)selector;
-		sra->baseAddress = (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
-		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
-		if (currentSelectorGdtEntry & 0x000F000000000000ull)
-		{
-			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
-		}
-		else
-		{
-			sra->segementLimit = segementLimitTemp;
-		}
-		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
-		if (usable)
-		{
-			sra->accessRight |= 0x10000ul;
-		}
-	}
-	if (type == 'fs' || type == 'gs')
-	{
-		ULONG_PTR GDTbase = __vsm__getGDTbase();
-		ULONG64 index = selector >> 3;
-		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
-		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
-		sra->selector = (USHORT)selector;
-		sra->baseAddress = 0; //需要从MSRs读取
-		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
-		if (currentSelectorGdtEntry & 0x000F000000000000ull)
-		{
-			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
-		}
-		else
-		{
-			sra->segementLimit = segementLimitTemp;
-		}
-		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
-		if (usable)
-		{
-			sra->accessRight |= 0x10000ul;
-		}
-	}
-	if (type == 'ldtr')
-	{
-		ULONG_PTR GDTbase = __vsm__getGDTbase();
-		ULONG64 index = selector >> 3;
-		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
-		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
-		sra->selector = (USHORT)selector;
-		sra->baseAddress = (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
-		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
-		if (currentSelectorGdtEntry & 0x000F000000000000ull)
-		{
-			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
-		}
-		else
-		{
-			sra->segementLimit = segementLimitTemp;
-		}
-		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
-		if (usable)
-		{
-			sra->accessRight |= 0x10000ul;
-		}
-	}
+	ULONG_PTR GDTbase = __vsm__getGDTbase();
+	ULONG64 index = selector >> 3;
+	ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+	ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+	sra->selector = (USHORT)selector;
+	sra->baseAddress = 0;
+	//64-bit模式会对fs的segementLimit作检查！
+	sra->segementLimit = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
+	sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
 	if (type == 'tr')
 	{
-		ULONG_PTR GDTbase = __vsm__getGDTbase();
-		ULONG64 index = selector >> 3;
-		ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
-		ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
-		sra->selector = (USHORT)selector;
-		//print(currentSelectorGdtEntryPointer);
-		//print(currentSelectorGdtEntry);
 		sra->baseAddress = (*(ULONG_PTR*)(currentSelectorGdtEntryPointer + 8)) << 32;
-		//print(sra->baseAddress);
 		sra->baseAddress += (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
-		//print(sra->baseAddress);
-		ULONG segementLimitTemp = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
-		if (currentSelectorGdtEntry & 0x000F000000000000ull)
-		{
-			sra->segementLimit = segementLimitTemp | 0xFFFF0000ul;
-		}
-		else
-		{
-			sra->segementLimit = segementLimitTemp;
-		}
-		sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
-		if (usable)
-		{
-			sra->accessRight |= 0x10000ul;
-		}
+	}
+	if (unusable)
+	{
+		sra->accessRight |= 0x10000ul;
 	}
 	return;
 }
 
-ULONG_PTR v(ULONG_PTR arg)
+ULONG_PTR virtualization(ULONG_PTR arg)
 {
 	UNREFERENCED_PARAMETER(arg);
 
@@ -189,18 +109,18 @@ ULONG_PTR v(ULONG_PTR arg)
 	__vmx_vmwrite(HOST_FS_SELECTOR, h_fs.selector & 0xFFF8);
 	__vmx_vmwrite(HOST_GS_SELECTOR, h_gs.selector & 0xFFF8);
 	__vmx_vmwrite(HOST_TR_SELECTOR, h_tr.selector & 0xFFF8);
-	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE)); //__readmsr(IA32_FS_BASE)
+	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
 	__vmx_vmwrite(HOST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
 	__vmx_vmwrite(HOST_TR_BASE_ADDRESS, (PVOID)h_tr.baseAddress);
 	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
 	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());
 	/*5.Guest-State Area字段*/
-	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs); //1
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs); 
 	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
 	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
 	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
-	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs); //0
-	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs); //0
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs); 
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs); 
 	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 1, &g_ldtr);
 	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &g_tr);
 	//选择子
@@ -212,7 +132,7 @@ ULONG_PTR v(ULONG_PTR arg)
 	__vmx_vmwrite(GUEST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
 	__vmx_vmwrite(GUEST_TR_BASE_ADDRESS, (PVOID)g_tr.baseAddress);
 	//限制
-	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, g_fs.segementLimit & 0xFFFFul); //爹！
+	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, g_fs.segementLimit);
 	__vmx_vmwrite(GUEST_GS_SEGEMENT_LIMIT, g_gs.segementLimit);
 	__vmx_vmwrite(GUEST_TR_SEGEMENT_LIMIT, g_tr.segementLimit);
 	//权限
@@ -310,7 +230,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		*(ULONG*)vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
 	}	
 
-	KeIpiGenericCall(v, 0);
+	KeIpiGenericCall(virtualization, 0); //IPI_LEVEL = 0xE;
 
 	return STATUS_SUCCESS;
 }
