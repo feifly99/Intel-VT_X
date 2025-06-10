@@ -1,4 +1,4 @@
-﻿#ifndef __INTEL_IA32_BASIC_INDEX__
+#ifndef __INTEL_IA32_BASIC_INDEX__
 #define __INTEL_IA32_BASIC_INDEX__
 
 #include "base.h"
