@@ -110,7 +110,7 @@ EXTERN realPhyAddAligned: QWORD
 	__vsm__vmlaunchSaveRegisters ENDP
 
 	__vsm__guestEntry PROC
-		;µ±Ç°CPUµÄRSPÎª GUEST_RSP£¬ÊÇGUESTÍâ²¿·ÖÅäµÄÄÇ¸öÕ»µ×
+		;å½“å‰CPUçš„RSPä¸º GUEST_RSPï¼Œæ˜¯GUESTå¤–éƒ¨åˆ†é…çš„é‚£ä¸ªæ ˆåº•
 		mov rax, gs: [20h]
 		mov eax, dword ptr [rax + 24h]
 		shl eax, 3
@@ -374,7 +374,7 @@ EXTERN realPhyAddAligned: QWORD
 					mov rbp, rsp
 
 					mov r11, 68h
-					sub rsp, r11 ;ÒòÎªÓĞcall bugCheck£¬ËùÒÔ²»µÃ²»¼õÈ¥x8hÈ¥¶ÔÆë¶ÑÕ»
+					sub rsp, r11 ;å› ä¸ºæœ‰call bugCheckï¼Œæ‰€ä»¥ä¸å¾—ä¸å‡å»x8hå»å¯¹é½å †æ ˆ
 
 					mov ecx, GUEST_FS_BASE_INDEX
 					vmread rcx, rcx
