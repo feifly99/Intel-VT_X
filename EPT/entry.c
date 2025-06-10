@@ -1,4 +1,4 @@
-﻿#include "IA32.h"
+#include "IA32.h"
 
 #pragma warning(disable: 28182)
 #pragma warning(disable: 6387)
@@ -35,6 +35,8 @@ ULONG_PTR tpPML4T, tpPDPT, tpPDT, tpPT;
 
 ULONG_PTR fakePage;
 
+ULONG_PTR pV2P;
+
 #define print(s) \
 do\
 {\
@@ -42,9 +44,45 @@ do\
 	DbgPrint("%s -> [0x%p]\n", #s, (PVOID)______________x);\
 }while(0)
 
+typedef UCHAR MEMORY_TYPE;
+
 VOID _bugCheck()
 {
 	KeBugCheckEx(0xACBCCCDC, 0, 0, 0, 0);
+}
+
+static MEMORY_TYPE getPhysicalMemoryCacheType(
+	ULONG_PTR physicalAddress //may not aligned!!!!!!!
+)
+{
+	if (physicalAddress <= 0x9FFFFull)
+	{
+		return 0x6; //WB
+	}
+	else if (physicalAddress >= 0xA0000ull && physicalAddress <= 0xBFFFFull)
+	{
+		return 0x0; //UC
+	}
+	else if (physicalAddress >= 0xC0000ull && physicalAddress <= 0xFFFFFull)
+	{
+		return 0x5; //WP
+	}
+	else if (physicalAddress >= 0x7B000000ull && physicalAddress <= 0x7FFFFFFFull)
+	{
+		return 0x0; //WB
+	}
+	else if (physicalAddress >= 0x80000000ull && physicalAddress <= 0x8FFFFFFFull)
+	{
+		return 0x1; //UC
+	}
+	else if (physicalAddress >= 0x90000000ull && physicalAddress <= 0xFFFFFFFFull)
+	{
+		return 0x0; //WP
+	}
+	else
+	{
+		return 0x6; //WB
+	}
 }
 
 ULONG_PTR allocatePages(
@@ -52,6 +90,10 @@ ULONG_PTR allocatePages(
 )
 {
 	ULONG_PTR ret = (ULONG_PTR)ExAllocatePoolWithTag(NonPagedPool, pagesNum * PAGE_SIZE, 'zzaa');
+	if (ret == 0)
+	{
+		KeBugCheckEx(0x343F3B34, 0, 0, 0, 0);
+	}
 	RtlZeroMemory((PVOID)ret, pagesNum * PAGE_SIZE);
 	return ret;
 }
@@ -150,12 +192,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 
 	totalCpuCount = KeQueryActiveProcessorCount(NULL);
 	PER_CPU_REGS = (ULONG_PTR*)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(ULONG_PTR), 'zzaa');
+	pV2P = (ULONG_PTR)MmGetPhysicalAddress;
 
 	vCpu = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'zzaa');
 	RtlZeroMemory(vCpu, totalCpuCount * sizeof(VCPU));
 
 	SIZE_T regionSizeNeeded = 0x1000;
-	ULONG vmcsIdentifier = (ULONG)1;
+	ULONG vmcsIdentifier = (ULONG)4;
 	PHYSICAL_ADDRESS tempVmxon = { 0 };
 	PHYSICAL_ADDRESS tempVmcsRegion = { 0 };
 
@@ -171,12 +214,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		tempVmcsRegion = MmGetPhysicalAddress(vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
 		vCpu[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
 
-		vCpu[j].virtualGuestStackSize = 0x11000;
+		vCpu[j].virtualGuestStackSize = 0x6000;
 		vCpu[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpu[j].virtualGuestStackSize, 'zzaa');
 		RtlZeroMemory(vCpu[j].virtualGuestStack, vCpu[j].virtualGuestStackSize);
 		vCpu[j].virtualGuestStackBottom = (PVOID)((ULONG_PTR)vCpu[j].virtualGuestStack + vCpu[j].virtualGuestStackSize - 0x1000);
 
-		vCpu[j].virtualHostStackSize = 0x11000;
+		vCpu[j].virtualHostStackSize = 0x6000;
 		vCpu[j].virtualHostStack = ExAllocatePoolWithTag(NonPagedPool, vCpu[j].virtualHostStackSize, 'zzaa');
 		RtlZeroMemory(vCpu[j].virtualHostStack, vCpu[j].virtualHostStackSize);
 		vCpu[j].virtualHostStackBottom = (PVOID)((ULONG_PTR)vCpu[j].virtualHostStack + vCpu[j].virtualHostStackSize - 0x1000);
@@ -187,7 +230,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		*(ULONG*)vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
 	}
 
-	size_t PDTpages = 32;
+	SIZE_T PDTpages = 512;
 
 	ULONG_PTR pPML4T = allocatePages(1);
 	ULONG_PTR pPDPT  = allocatePages(1);
@@ -195,20 +238,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	ULONG_PTR pPT    = allocatePages(PDTpages * 512);
 
 	tpPML4T = pPML4T;
-	tpPDPT = pPDPT;
-	tpPDT = pPDT;
-	tpPT = pPT;
+	tpPDPT	= pPDPT;
+	tpPDT	= pPDT;
+	tpPT	= pPT;
 
 	ULONG_PTR realPhyAdd = (ULONG_PTR)MmGetPhysicalAddress((PVOID)NtOpenProcess).QuadPart;
 	realPhyAddAligned = realPhyAdd & ~0xFFFull;
 	fakePage = allocatePages(1);
 	fakePhyAddAligned = (ULONG_PTR)MmGetPhysicalAddress((PVOID)fakePage).QuadPart;
-
-	if (pPML4T == 0 || pPDPT == 0 || pPDT == 0 || pPT == 0)
-	{
-		KeBugCheckEx(0x34333334, 0, 0, 0, 0);
-	}
-
+	
 	*(ULONG_PTR*)pPML4T = pPDPT;
 	for (size_t i = 0; i < PDTpages; i++)
 	{
@@ -223,12 +261,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		size_t BIT_20_12 = pteIndex % 512;
 		size_t BIT_29_21 = (pteIndex / 512) % 512;
 		size_t BIT_38_30 = (pteIndex / 0x40000) % 512;
-		((ULONG_PTR*)pPT)[pteIndex] = ((BIT_38_30 << 30) + (BIT_29_21 << 21) + (BIT_20_12 << 12)) | 0x37;
-		if (((BIT_38_30 << 30) + (BIT_29_21 << 21) + (BIT_20_12 << 12)) == realPhyAddAligned)
-		{
-			((ULONG_PTR*)pPT)[pteIndex] = 0;
-			pPte = (ULONG_PTR)((ULONG_PTR*)pPT + pteIndex);
-		}
+		ULONG_PTR phyPageAddress = (ULONG_PTR)((BIT_38_30 << 30) + (BIT_29_21 << 21) + (BIT_20_12 << 12));
+		UCHAR cacheType = getPhysicalMemoryCacheType((ULONG_PTR)phyPageAddress);
+		((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x7 | ((ULONG64)cacheType << 3);
 	}
 	for (size_t i = 0; i < PDTpages * 512; i++)
 	{
@@ -341,8 +376,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	}
 	
 	KeIpiGenericCall(virtualization, 0);
-
-	//print(KeGetCurrentIrql());
 
 	return STATUS_SUCCESS;
 }
