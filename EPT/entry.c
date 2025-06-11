@@ -264,6 +264,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		ULONG_PTR phyPageAddress = (ULONG_PTR)((BIT_38_30 << 30) + (BIT_29_21 << 21) + (BIT_20_12 << 12));
 		UCHAR cacheType = getPhysicalMemoryCacheType((ULONG_PTR)phyPageAddress);
 		((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x7 | ((ULONG64)cacheType << 3);
+		if (phyPageAddress == realPhyAddAligned)
+		{
+			((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x4 | ((ULONG64)cacheType << 3);
+			pPte = (ULONG_PTR)((ULONG_PTR*)pPT + pteIndex);
+		}
 	}
 	for (size_t i = 0; i < PDTpages * 512; i++)
 	{
