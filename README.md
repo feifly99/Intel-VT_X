@@ -8,9 +8,11 @@
 
     VT-X Minimal中，作了如下更新：
     1.手动保存恢复x87FPU/AVX/SSE状态；
-    2.在VT卸载后，修复GDT/IDT的Limit段限制(0x57ui16 & 0xFFFui16)
+    2.在VT卸载后，修复GDT/IDT的Limit段限制(0x57ui16 & 0xFFFui16)；
+    3.删除了旧的vt.asm和vt_plus.asm，换成了全新的vt.asm；
+    4.在vmxoff前，对每个处理器执行了vmclear.
 
-    另外，VT的HOST_ENTRY中不要保存CRX & DRX寄存器：
+    另外，VT的HOST_ENTRY中尽量不要手动管理CRX & DRX寄存器：
     1.CR3.mov to CR3会导致缓存不一致；
     2.CR4.mov to CR4的某些位需要用INVVPID去刷新。
     3.就算保存了，最后还是通过GUEST的区域由硬件CPU恢复。
