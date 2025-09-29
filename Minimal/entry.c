@@ -243,6 +243,8 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		tempVmcsRegion = MmGetPhysicalAddress(vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
 		vCpu[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
 
+		RtlCopyMemory((PVOID)(vCpu[j].regs + 0x500), (PVOID)&vCpu[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS, sizeof(ULONG_PTR));
+
 		vCpu[j].virtualGuestStackSize = 0x4000;
 		vCpu[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpu[j].virtualGuestStackSize, 'zzaa');
 		RtlZeroMemory(vCpu[j].virtualGuestStack, vCpu[j].virtualGuestStackSize);
