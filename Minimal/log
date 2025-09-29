@@ -1,0 +1,2656 @@
+前导（开启所有处理器的VMXE扩展位）
+	if (__vasm__isVMXOperationsSupported() == 1)
+	{
+		DbgPrint("此CPU架构支持VMXE模式！\n");
+	}
+	else
+	{
+		DbgPrint("此CPU架构不支持VMXE模式！\n");
+	}
+	ULONG initialCpuIndex = KeGetCurrentProcessorIndex();
+	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
+	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
+	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU)); 
+	PHYSICAL_ADDRESS maxAddressAcceptable = { 0 };
+	maxAddressAcceptable.QuadPart = MAXULONG64;
+	for (ULONG loop = 0; loop < totalCpuCount; loop++)
+	{
+		KeSetSystemAffinityThread((KAFFINITY)(1 << loop));
+		DbgPrint("当前处理的虚拟CPU编号：%lu(%lu) -> 修改前CR4: %llX\n", loop, KeGetCurrentProcessorIndex(), __vsm__getCR4());
+		__vasm__setCR4VMXEBit();
+		vCpus[loop].currentCr4 = __vsm__getCR4();
+		DbgPrint("当前处理的虚拟CPU编号：%lu(%lu) -> 修改后CR4: %llX\n", loop, KeGetCurrentProcessorIndex(), vCpus[loop].currentCr4);
+		PVOID virContiguousAdd = MmAllocateContiguousMemory((((SIZE_T)__readmsr(IA32_VMX_BASIC)) >> 32) & 0xFFFFull, maxAddressAcceptable);
+		RtlZeroMemory(virContiguousAdd, (((SIZE_T)__readmsr(IA32_VMX_BASIC)) >> 32) & 0xFFFFull);
+		PHYSICAL_ADDRESS phyContiguousAdd = MmGetPhysicalAddress(virContiguousAdd);
+		vCpus[loop].VMX_ON_REGION_PHYSICAL = phyContiguousAdd.QuadPart;
+		//fulfill VMCS Region Identifier
+		*(ULONG*)virContiguousAdd = (ULONG)__readmsr(IA32_VMX_BASIC) & 0x7FFFFFFFul;
+		if (__vmx_on(&vCpus[loop].VMX_ON_REGION_PHYSICAL) == 0)
+		{
+			DbgPrint("编号为%lu(%lu)的虚拟处理器已经进入VMXE模式.\n", loop, KeGetCurrentProcessorIndex());
+		}
+		else
+		{
+			DbgPrint("编号为%lu(%lu)的虚拟处理器没有进入VMXE模式！\n", loop, KeGetCurrentProcessorIndex());
+		}
+	}
+	KeSetSystemAffinityThread((KAFFINITY)(1 << initialCpuIndex));
+
+
+
+/*****************************************************/
+if (__vasm__isVMXOperationsSupported() == 1)
+	{
+		DbgPrint("此CPU架构支持VMXE模式！\n");
+	}
+	else
+	{
+		DbgPrint("此CPU架构不支持VMXE模式！\n");
+	}
+	ULONG totalCpuCount = KeQueryActiveProcessorCount(NULL);
+	vCpus = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'z+aa');
+	RtlZeroMemory(vCpus, totalCpuCount * sizeof(VCPU)); 
+	print(totalCpuCount);
+	SIZE_T regionSizeNeeded = 0x1000;
+	ULONG vmcsIdentifier = (ULONG)1;
+	//初始化虚拟CPU的属性
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		vCpus[j].currentCr4 = __vsm__getCR4();
+
+		vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = ExAllocatePoolWithTag(NonPagedPool, regionSizeNeeded, 'vmon');
+		RtlZeroMemory(vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS, regionSizeNeeded);
+		PHYSICAL_ADDRESS tempVmxon = { 0 };
+		tempVmxon = MmGetPhysicalAddress(vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpus[j].VMX_ON_REGION_PHYSICAL_ADDRESS = tempVmxon.QuadPart;
+
+		vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = ExAllocatePoolWithTag(NonPagedPool, regionSizeNeeded, 'vmcs');
+		RtlZeroMemory(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS, regionSizeNeeded);
+		PHYSICAL_ADDRESS tempVmcsRegion = { 0 };
+		tempVmcsRegion = MmGetPhysicalAddress(vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
+		vCpus[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
+
+		vCpus[j].virtualGuestStackSize = 0x5000;
+		vCpus[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualGuestStackSize, 'gstk');
+		RtlZeroMemory(vCpus[j].virtualGuestStack, vCpus[j].virtualGuestStackSize);
+		vCpus[j].virtualGuestStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualGuestStack + vCpus[j].virtualGuestStackSize - 0x1000);
+
+		vCpus[j].virtualHostStackSize = 0x5000;
+		vCpus[j].virtualHostStack = ExAllocatePoolWithTag(NonPagedPool, vCpus[j].virtualHostStackSize, 'hstk');
+		RtlZeroMemory(vCpus[j].virtualHostStack, vCpus[j].virtualHostStackSize);
+		vCpus[j].virtualHostStackBottom = (PVOID)((ULONG_PTR)vCpus[j].virtualHostStack + vCpus[j].virtualHostStackSize - 0x1000);
+
+		*(ULONG*)vCpus[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
+		*(ULONG*)vCpus[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
+	}
+	//开启CR4.VMXE位
+	for (size_t j = 0; j < totalCpuCount; j++)
+	{
+		KeSetSystemAffinityThread((KAFFINITY)(1 << j));
+		__vasm__setCR4VMXEBit();
+		vCpus[j].currentCr4 = __vsm__getCR4();
+		__vmx_on(&vCpus[j].VMX_ON_REGION_PHYSICAL_ADDRESS);
+	}
+	//选择一个虚拟CPU的VMCS作为`current VMCS`
+	KAFFINITY currentVMCSCpuIndex = 1;
+	KeSetSystemAffinityThread((KAFFINITY)(1 << currentVMCSCpuIndex));
+	__vmx_vmclear(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
+	__vmx_vmptrld(&vCpus[currentVMCSCpuIndex].VMX_VMCS_REGION_PHYSICAL_ADDRESS);
+	//写入VMCS各个字段
+	/*1.VM-Exit Control字段*/
+	__vmx_vmwrite(VExCF_PRIMARY_VM_EXIT_CONTROLS, 0x36FFBul); //物理机 0x36FFB
+	/*2.VM-Entry Control字段*/
+	__vmx_vmwrite(VEnCF_VM_ENTRY_CONTROLS, 0x13FBul); //物理机 0x13FBul
+	/*3.VM-Execution Control字段*/
+	__vmx_vmwrite(VECF_PIN_BASED_VM_EXECUTION_CONTROL, 0x16ul); //物理机 0x16ul
+	__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x4006172ul); //物理机 0x4006172ul
+	/*4.Host-State Area字段*/
+	SRA h_cs, h_ss, h_ds, h_es, h_fs, h_gs, h_ldtr, h_tr;
+	getSegementRegisterAttributes('cs',__vsm__getCS(), 0, &h_cs);
+	getSegementRegisterAttributes('ss',__vsm__getSS(), 0, &h_ss);
+	getSegementRegisterAttributes('ds',__vsm__getDS(), 0, &h_ds);
+	getSegementRegisterAttributes('es',__vsm__getES(), 0, &h_es);
+	getSegementRegisterAttributes('fs',__vsm__getFS(), 0, &h_fs);
+	getSegementRegisterAttributes('gs',__vsm__getGS(), 0, &h_gs);
+	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 0, &h_ldtr);
+	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &h_tr);
+	__vmx_vmwrite(HOST_CR0, __readcr0());
+	__vmx_vmwrite(HOST_CR3, __readcr3());
+	__vmx_vmwrite(HOST_CR4, __readcr4());
+	__vmx_vmwrite(HOST_RSP, (PVOID)vCpus[currentVMCSCpuIndex].virtualHostStackBottom);
+	__vmx_vmwrite(HOST_RIP, (PVOID)__vsm__hostEntry);
+	__vmx_vmwrite(HOST_CS_SELECTOR, h_cs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_SS_SELECTOR, h_ss.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_DS_SELECTOR, h_ds.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_ES_SELECTOR, h_es.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_FS_SELECTOR, h_fs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_GS_SELECTOR, h_gs.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_TR_SELECTOR, h_tr.selector & 0xFFF8);
+	__vmx_vmwrite(HOST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(HOST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
+	__vmx_vmwrite(HOST_TR_BASE_ADDRESS, (PVOID)h_tr.baseAddress);
+	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
+	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());	
+	/*5.Guest-State Area字段*/
+	SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 0, &g_cs);
+	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
+	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
+	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 1, &g_fs);
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 1, &g_gs);
+	getSegementRegisterAttributes('ldtr',__vsm__getLDTR(), 1, &g_ldtr);
+	getSegementRegisterAttributes('tr',__vsm__getTR(), 0, &g_tr); //必须清零， 28.3.1.2
+	//寄存器
+	__vmx_vmwrite(GUEST_CR0, __readcr0());
+	__vmx_vmwrite(GUEST_CR3, __readcr3());
+	__vmx_vmwrite(GUEST_CR4, __readcr4());
+	__vmx_vmwrite(GUEST_DR7, __readdr(7));
+	__vmx_vmwrite(GUEST_RFLAGS, __readeflags());
+	__vmx_vmwrite(GUEST_RSP, (PVOID)vCpus[currentVMCSCpuIndex].virtualGuestStackBottom);
+	__vmx_vmwrite(GUEST_RIP, (PVOID)__vsm__guestEntry);
+	//选择子
+	__vmx_vmwrite(GUEST_CS_SELECTOR, (ULONG64)g_cs.selector); //pass
+	__vmx_vmwrite(GUEST_SS_SELECTOR, (ULONG64)g_ss.selector); //pass
+	__vmx_vmwrite(GUEST_DS_SELECTOR, (ULONG64)g_ds.selector); //pass
+	__vmx_vmwrite(GUEST_ES_SELECTOR, (ULONG64)g_es.selector); //pass
+	__vmx_vmwrite(GUEST_FS_SELECTOR, (ULONG64)g_fs.selector); //pass
+	__vmx_vmwrite(GUEST_GS_SELECTOR, (ULONG64)g_gs.selector); //pass
+	__vmx_vmwrite(GUEST_LDTR_SELECTOR, (ULONG64)g_ldtr.selector); //pass
+	__vmx_vmwrite(GUEST_TR_SELECTOR, (ULONG64)g_tr.selector); //pass
+	//基地址
+	__vmx_vmwrite(GUEST_CS_BASE_ADDRESS, (ULONG64)g_cs.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_SS_BASE_ADDRESS, (ULONG64)g_ss.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_DS_BASE_ADDRESS, (ULONG64)g_ds.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_ES_BASE_ADDRESS, (ULONG64)g_es.baseAddress & 0xFFFFFFFFull);
+	__vmx_vmwrite(GUEST_FS_BASE_ADDRESS, __readmsr(IA32_FS_BASE));
+	__vmx_vmwrite(GUEST_GS_BASE_ADDRESS, __readmsr(IA32_GS_BASE));
+	__vmx_vmwrite(GUEST_LDTR_BASE_ADDRESS, (ULONG64)g_ldtr.baseAddress);
+	__vmx_vmwrite(GUEST_TR_BASE_ADDRESS, (ULONG64)g_tr.baseAddress);
+	//限制
+	__vmx_vmwrite(GUEST_CS_SEGEMENT_LIMIT, (ULONG64)g_cs.segementLimit);
+	__vmx_vmwrite(GUEST_SS_SEGEMENT_LIMIT, (ULONG64)g_ss.segementLimit);
+	__vmx_vmwrite(GUEST_DS_SEGEMENT_LIMIT, (ULONG64)g_ds.segementLimit);
+	__vmx_vmwrite(GUEST_ES_SEGEMENT_LIMIT, (ULONG64)g_es.segementLimit);
+	__vmx_vmwrite(GUEST_FS_SEGEMENT_LIMIT, (ULONG64)g_fs.segementLimit);
+	__vmx_vmwrite(GUEST_GS_SEGEMENT_LIMIT, (ULONG64)g_gs.segementLimit);
+	__vmx_vmwrite(GUEST_LDTR_SEGEMENT_LIMIT, (ULONG64)g_ldtr.segementLimit);
+	__vmx_vmwrite(GUEST_TR_SEGEMENT_LIMIT, (ULONG64)g_tr.segementLimit);
+	//权限
+	__vmx_vmwrite(GUEST_CS_ACCESS_RIGHTS, (ULONG64)g_cs.accessRight); //g_cs.accessRight	
+	__vmx_vmwrite(GUEST_SS_ACCESS_RIGHTS, (ULONG64)g_ss.accessRight); //g_ss.accessRight
+	__vmx_vmwrite(GUEST_DS_ACCESS_RIGHTS, (ULONG64)g_ds.accessRight & ~0xF00ull); //g_ds.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_ES_ACCESS_RIGHTS, (ULONG64)g_es.accessRight & ~0xF00ull); //g_es.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_FS_ACCESS_RIGHTS, (ULONG64)g_fs.accessRight & ~0xF00ull); //g_fs.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_GS_ACCESS_RIGHTS, (ULONG64)g_gs.accessRight & ~0xF00ull); //g_gs.accessRight // &~0xF00ull
+	__vmx_vmwrite(GUEST_LDTR_ACCESS_RIGHTS, (ULONG64)g_tr.accessRight);
+	__vmx_vmwrite(GUEST_TR_ACCESS_RIGHTS, (ULONG64)g_tr.accessRight);
+	//G/IDT表
+	__vmx_vmwrite(GUEST_GDTR_BASE, __vsm__getGDTbase());
+	__vmx_vmwrite(GUEST_IDTR_BASE, __vsm__getIDTbase());
+	__vmx_vmwrite(GUEST_GDTR_LIMIT, __vsm__getGDTlimit() & ~0xFFFF0000ull); //28.3.1.3
+	__vmx_vmwrite(GUEST_IDTR_LIMIT, __vsm__getIDTlimit() & ~0xFFFF0000ull); //28.3.1.3
+	//其他
+	__vmx_vmwrite(GUEST_IA32_DEBUGCTL, __readmsr(IA32_DEBUGCTL));
+	__vmx_vmwrite(GUEST_VMCS_LINK_POINTER, 0xFFFFFFFFFFFFFFFFull);
+
+	__vsm__NOP();
+
+	print(__readeflags());
+
+	print(__vmx_vmlaunch());
+	ULONG64 error = 0;
+	__vmx_vmread(VEIF_VM_INSTRUCTION_ERROR_FIELD, &error);
+	print(error);
+
+/*****************************************************/
+
+
+
+
+	__vsm__hostEntry PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		cmp rcx, 32
+	jnz BSOD
+		mov rax, __RAX
+		mov rdx, __RDX
+		mov rcx, __RCX
+		wrmsr
+		
+		mov eax, GUEST_RIP_INDEX
+		vmread rax, rax
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmwrite rcx, rcx
+
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+BSOD:
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rcx, GlobalDebugWindow
+		call KeBugCheckExAddress
+	__vsm__hostEntry ENDP
+
+
+
+
+
+
+
+
+
+
+	__vsm__vmlaunchSaveRegisters PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov __RSI, rsi
+		mov __RDI, rdi
+		mov __RSP, rsp
+		mov __RBP, rbp
+		mov __R8, r8
+		mov __R9, r9
+		mov __R10, r10
+		mov __R11, r11
+		mov __R12, r12
+		mov __R13, r13
+		mov __R14, r14
+		mov __R15, r15
+		pushfq
+		pop rax
+		mov __RFLAGS, rax
+		pop rax
+		mov DRIVER_RIP, rax
+		vmlaunch
+	__vsm__vmlaunchSaveRegisters ENDP
+
+	__vsm__guestEntry PROC
+		sub tempFLAGS, 8
+		cmp rsp, tempFLAGS
+		jz trapCPUID
+		wrmsr
+trapCPUID:
+		cpuid
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RSI
+		mov rsp, __RSP
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15
+		jmp DRIVER_RIP
+		;放虎归山，只是让控制流继续走驱动
+		;但是VMCS已经为'launched'状态,可以在host以vmresume唤醒虚拟机
+	__vsm__guestEntry ENDP
+
+
+	__vsm__hostEntry PROC
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		mov __RFLAGS, rcx
+
+		;EXTERN GUEST_RIP_INDEX: DWORD
+		;EXTERN GUEST_RSP_INDEX: DWORD
+		;EXTERN GUEST_RFLAGS_INDEX: DWORD
+		;EXTERN HOST_RIP_INDEX: DWORD
+		;EXTERN HOST_RSP_INDEX: DWORD
+		;EXTERN VM_EXIT_REASON_INDEX: DWORD
+		;EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
+		;EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
+
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		cmp rcx, 31
+	jz  BSOD
+		cmp rcx, 32
+	jz	HANDLE_WRMSR
+		cmp rcx, 10
+	jz  HANDLE_CPUID
+	jmp BSOD
+HANDLE_WRMSR:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+
+		wrmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		add rcx, 2
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+
+		vmresume
+HANDLE_RDMSR:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		rdmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		mov eax, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rax, rax
+		add rcx, rax
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+HANDLE_CPUID:
+		;mov ecx, GUEST_RFLAGS_INDEX
+		;vmread rcx, rcx
+		mov rax, __RFLAGS
+		push rax
+		popfq
+
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		cpuid
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		add rcx, 2
+		mov eax, GUEST_RIP_INDEX
+		vmwrite rax, rcx
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		vmresume
+BSOD:
+		mov rax, __RFLAGS
+		push rax
+		popfq
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		shl rcx, 16
+		call KeBugCheckExAddress
+
+
+		HANDLE_WRMSR:
+		;设置当前上下文的RFLAGS为GUEST_RFLAGS
+		;防止由于几乎全零的RFLAGS导致某些指令(比如CPUID)无法执行
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		popfq
+		;先把RIP加长度，越过当前指令
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx ;长度
+		mov eax, GUEST_RIP_INDEX
+		vmread rax, rax ;RIP
+		add rax, rcx ;调整后的RIP
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax ;把调整后的RIP写入GUEST_RIP_INDEX FIELD
+		;模拟执行WRMSR
+		mov rax, __RAX
+		mov rcx, __RCX 
+		mov rdx, __RDX ;恢复原来刚进入时的RAX, RCX和RDX
+		wrmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		pushfq
+		pop rax ;别忘了保存最新的FLAGS寄存器
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续
+HANDLE_RDMSR:
+		;设置当前上下文的RFLAGS为GUEST_RFLAGS
+		;防止由于几乎全零的RFLAGS导致某些指令(比如CPUID)无法执行
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		popfq
+		;先把RIP加长度，越过当前指令
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx ;长度
+		mov eax, GUEST_RIP_INDEX
+		vmread rax, rax ;RIP
+		add rax, rcx ;调整后的RIP
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax ;把调整后的RIP写入GUEST_RIP_INDEX FIELD
+		;模拟执行RDMSR
+		mov rcx, __RCX ;恢复原来刚进入时的RCX
+		rdmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;RDMSR可能会影响这四个寄存器
+		pushfq
+		pop rax ;别忘了保存最新的FLAGS寄存器
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		
+OUTSIDE:
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		popfq
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx ;恢复虚拟机的RIP指令指针
+		mov rcx, qword ptr [rcx]
+		call bugCheck
+		;mov ecx, GUEST_RSP_INDEX
+		;vmread rsp, rcx ;把当前CPU的栈顶指针换成虚拟机的RSP栈顶指针
+		;mov ecx, GUEST_RFLAGS_INDEX
+		;vmread rcx, rcx ;读取虚拟机的RFLAGS寄存器
+		;push rcx ;注意此时操作的堆栈指针是原来GUEST的RSP
+		;popfq ;把当前CPU的RFLAGS值恢复为虚拟机的RFLAGS值
+		;mov rcx, qword ptr [rcx]
+		;call bugCheck
+		;call bugCheck
+		;call bugCheck
+		;call bugCheck
+		;call bugCheck
+		;call bugCheck
+		;call bugCheck
+		;mov DRIVER_RIP, rcx ;保存VMXOFF后跳转地址
+		;mov rax, __RAX
+		;mov rbx, __RBX
+		;mov rcx, __RCX
+		;mov rdx, __RDX
+		;mov rsi, __RSI
+		;mov rdi, __RDI
+		;mov rbp, __RBP
+		;mov r8, __R8
+		;mov r9, __R9
+		;mov r10, __R10
+		;mov r11, __R11
+		;mov r12, __R12
+		;mov r13, __R13
+		;mov r14, __R14
+		;mov r15, __R15 ;恢复所有通用寄存器。由于准备不处理，所以没有任何值发生改动
+		;vmxoff
+;jmp DRIVER_RIP ;把当前CPU的RIP换成虚拟机的RIP
+
+
+HANDLE_CPUID:
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, __RIP ;步进RIP
+		mov rax, __RAX
+		mov rcx, __RCX ;恢复原来刚进入时的RAX, RCX和RDX
+		cpuid
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, cr0
+		mov __CR0, rcx
+		mov rcx, cr3
+		mov __CR3, rcx
+		mov rcx, cr4
+		mov __CR4, rcx
+		pushfq
+		pop rax ;别忘了保存最新的FLAGS寄存器
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov ecx, GUEST_CR0_INDEX
+		vmwrite rcx, __CR0
+		mov ecx, GUEST_CR3_INDEX
+		vmwrite rcx, __CR3
+		mov ecx, GUEST_CR4_INDEX
+		vmwrite rcx, __CR4
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续
+HANDLE_RDMSR:
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, __RIP ;步进RIP
+		mov rcx, __RCX ;恢复原来刚进入时的RAX, RCX和RDX
+		rdmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, cr0
+		mov __CR0, rcx
+		mov rcx, cr3
+		mov __CR3, rcx
+		mov rcx, cr4
+		mov __CR4, rcx
+		pushfq
+		pop rax ;别忘了保存最新的FLAGS寄存器
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov ecx, GUEST_CR0_INDEX
+		vmwrite rcx, __CR0
+		mov ecx, GUEST_CR3_INDEX
+		vmwrite rcx, __CR3
+		mov ecx, GUEST_CR4_INDEX
+		vmwrite rcx, __CR4
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续
+HANDLE_WRMSR:
+		mov ecx, INSTRUCTION_LENGTH
+		add __RIP, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, __RIP ;步进RIP
+		mov rax, __RAX
+		mov rcx, __RCX 
+		mov rdx, __RDX ;恢复原来刚进入时的RAX, RCX和RDX
+		wrmsr
+		mov __RAX, rax
+		mov __RBX, rbx
+		mov __RCX, rcx
+		mov __RDX, rdx ;WRMSR可能会影响这四个寄存器
+		mov rcx, cr0
+		mov __CR0, rcx
+		mov rcx, cr3
+		mov __CR3, rcx
+		mov rcx, cr4
+		mov __CR4, rcx
+		pushfq
+		pop rax ;别忘了保存最新的FLAGS寄存器
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmwrite rcx, rax ;任何指令都可能隐式改变RFLAGS
+		mov ecx, GUEST_CR0_INDEX
+		vmwrite rcx, __CR0
+		mov ecx, GUEST_CR3_INDEX
+		vmwrite rcx, __CR3
+		mov ecx, GUEST_CR4_INDEX
+		vmwrite rcx, __CR4
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8, __R8
+		mov r9, __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15 ;恢复所有寄存器，注意可能会被影响的寄存器已经写入全局__REG了
+		vmresume ; 继续	
+
+
+
+
+EXCEPTION_NO_HITTED:
+		add rsp, 10h ;跳过LENGTH和REASON字段，用不上
+		popfq ;把当前的RFLAGS置为GUEST的RFLAGS
+		pop rbx ;保存GUEST RIP
+		pop rax ;保存GUEST RSP
+		pop r13 
+		mov cr4, r13 ;赋值CR4
+		pop r13
+		mov cr3, r13 ;赋值CR3
+		pop r13
+		mov cr0, r13 ;赋值CR0
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		mov DRIVER_RIP, rbx
+		mov DRIVER_RSP, rax
+		pop rbx
+		pop rax ;恢复所有通用寄存器。由于不准备处理，所以没有任何值发生改动
+		mov ecx, EXIT_REASON
+		shl rcx, 16
+		call bugCheck
+	jmp DRIVER_RIP
+
+
+
+
+		mov ecx, GUEST_CR0_INDEX
+		vmread rcx, rcx
+		push rcx
+		
+		mov ecx, GUEST_CR3_INDEX
+		vmread rcx, rcx
+		push rcx
+		
+		mov ecx, GUEST_CR4_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ecx, dword ptr [rsp + 8h]
+		mov EXIT_REASON, ecx
+
+		cmp EXIT_REASON, 10
+	jz  HANDLE_CPUID
+		cmp EXIT_REASON, 31
+	jz  HANDLE_RDMSR
+		cmp EXIT_REASON, 32
+	jz  HANDLE_WRMSR
+	jmp EXCEPTION_NO_HITTED
+HANDLE_CPUID:
+		mov rcx, qword ptr [rsp + 108h]
+		call bugCheck
+		mov rcx, qword ptr [rsp + 10h]
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+
+		mov rcx, qword ptr [rsp + 28h]
+		mov cr4, rcx
+		mov rcx, qword ptr [rsp + 30h]
+		mov cr3, rcx
+		mov rcx, qword ptr [rsp + 38h]
+		mov cr0, rcx ;恢复原来刚进入时的CR0/CR3和CR4
+
+		mov rax, qword ptr [rsp + 110h]
+		mov rbx, qword ptr [rsp + 108h]
+		mov rcx, qword ptr [rsp + 100h]
+		mov rdx, qword ptr [rsp + 98h]
+		mov rsi, qword ptr [rsp + 90h]
+		mov rdi, qword ptr [rsp + 88h]
+		mov rbp, qword ptr [rsp + 80h]
+		mov r8, qword ptr [rsp + 78h]
+		mov r9, qword ptr [rsp + 70h]
+		mov r10, qword ptr [rsp + 68h]
+		mov r11, qword ptr [rsp + 60h]
+		mov r12, qword ptr [rsp + 58h]
+		mov r13, qword ptr [rsp + 50h]
+		mov r14, qword ptr [rsp + 48h]
+		mov r15, qword ptr [rsp + 40h] ;恢复原来刚进入时所有通用寄存器状态
+
+		cpuid ;模拟执行指令
+
+		mov qword ptr [rsp + 40h], r15
+		mov qword ptr [rsp + 48h], r14
+		mov qword ptr [rsp + 50h], r13
+		mov qword ptr [rsp + 58h], r12
+		mov qword ptr [rsp + 60h], r11
+		mov qword ptr [rsp + 68h], r10
+		mov qword ptr [rsp + 70h], r9
+		mov qword ptr [rsp + 78h], r8
+		mov qword ptr [rsp + 80h], rbp
+		mov qword ptr [rsp + 88h], rdi
+		mov qword ptr [rsp + 90h], rsi
+		mov qword ptr [rsp + 98h], rdx
+		mov qword ptr [rsp + 100h], rcx
+		mov qword ptr [rsp + 108h], rbx
+		mov qword ptr [rsp + 110h], rdx ;把所有新的通用寄存器状态写回HOST临时栈
+
+		pushfq
+		pop rcx ;保存新的RFLAGS
+		mov eax, GUEST_RFLAGS_INDEX
+		vmwrite rax, rcx ;把更新后的RFLAGS写回GUEST
+
+		mov rcx, qword ptr [rsp + 0h] ;获取指令长度
+		mov rax, qword ptr [rsp + 18h] ;获取指令地址
+		add rax, rcx ;步进RIP
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax ;把步进后的RIP写回GUEST
+
+		add rsp, 28h ;跳过RFLAGS/RIP/RSP这几个已经修改过或者无需修改的字段
+		
+		pop rcx
+		mov eax, GUEST_CR4_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR3_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR0_INDEX
+		vmwrite rax, rcx ;把所有新的控制寄存器状态写回GUEST
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax ;恢复所有通用寄存器
+
+		vmresume 
+HANDLE_RDMSR:
+		mov rcx, qword ptr [rsp + 10h]
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+
+		mov rcx, qword ptr [rsp + 28h]
+		mov cr4, rcx
+		mov rcx, qword ptr [rsp + 30h]
+		mov cr3, rcx
+		mov rcx, qword ptr [rsp + 38h]
+		mov cr0, rcx ;恢复原来刚进入时的CR0/CR3和CR4
+
+		mov rax, qword ptr [rsp + 110h]
+		mov rbx, qword ptr [rsp + 108h]
+		mov rcx, qword ptr [rsp + 100h]
+		mov rdx, qword ptr [rsp + 98h]
+		mov rsi, qword ptr [rsp + 90h]
+		mov rdi, qword ptr [rsp + 88h]
+		mov rbp, qword ptr [rsp + 80h]
+		mov r8, qword ptr [rsp + 78h]
+		mov r9, qword ptr [rsp + 70h]
+		mov r10, qword ptr [rsp + 68h]
+		mov r11, qword ptr [rsp + 60h]
+		mov r12, qword ptr [rsp + 58h]
+		mov r13, qword ptr [rsp + 50h]
+		mov r14, qword ptr [rsp + 48h]
+		mov r15, qword ptr [rsp + 40h] ;恢复原来刚进入时所有通用寄存器状态
+
+		rdmsr ;模拟执行指令
+
+		mov qword ptr [rsp + 40h], r15
+		mov qword ptr [rsp + 48h], r14
+		mov qword ptr [rsp + 50h], r13
+		mov qword ptr [rsp + 58h], r12
+		mov qword ptr [rsp + 60h], r11
+		mov qword ptr [rsp + 68h], r10
+		mov qword ptr [rsp + 70h], r9
+		mov qword ptr [rsp + 78h], r8
+		mov qword ptr [rsp + 80h], rbp
+		mov qword ptr [rsp + 88h], rdi
+		mov qword ptr [rsp + 90h], rsi
+		mov qword ptr [rsp + 98h], rdx
+		mov qword ptr [rsp + 100h], rcx
+		mov qword ptr [rsp + 108h], rbx
+		mov qword ptr [rsp + 110h], rdx ;把所有新的通用寄存器状态写回HOST临时栈
+		
+		pushfq
+		pop rcx ;保存新的RFLAGS
+		mov eax, GUEST_RFLAGS_INDEX
+		vmwrite rax, rcx ;把更新后的RFLAGS写回GUEST
+
+		mov rcx, qword ptr [rsp + 0h] ;获取指令长度
+		mov rax, qword ptr [rsp + 18h] ;获取指令地址
+		add rax, rcx ;步进RIP
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax ;把步进后的RIP写回GUEST
+
+		add rsp, 28h ;跳过RFLAGS/RIP/RSP这几个已经修改过或者无需修改的字段
+		
+		pop rcx
+		mov eax, GUEST_CR4_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR3_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR0_INDEX
+		vmwrite rax, rcx ;把所有新的控制寄存器状态写回GUEST
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax ;恢复所有通用寄存器
+
+		vmresume 
+HANDLE_WRMSR:
+		mov rcx, qword ptr [rsp + 10h]
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS		
+
+		mov rcx, qword ptr [rsp + 28h]
+		mov cr4, rcx
+		mov rcx, qword ptr [rsp + 30h]
+		mov cr3, rcx
+		mov rcx, qword ptr [rsp + 38h]
+		mov cr0, rcx ;恢复原来刚进入时的CR0/CR3和CR4
+
+		mov rax, qword ptr [rsp + 110h]
+		mov rbx, qword ptr [rsp + 108h]
+		mov rcx, qword ptr [rsp + 100h]
+		mov rdx, qword ptr [rsp + 98h]
+		mov rsi, qword ptr [rsp + 90h]
+		mov rdi, qword ptr [rsp + 88h]
+		mov rbp, qword ptr [rsp + 80h]
+		mov r8, qword ptr [rsp + 78h]
+		mov r9, qword ptr [rsp + 70h]
+		mov r10, qword ptr [rsp + 68h]
+		mov r11, qword ptr [rsp + 60h]
+		mov r12, qword ptr [rsp + 58h]
+		mov r13, qword ptr [rsp + 50h]
+		mov r14, qword ptr [rsp + 48h]
+		mov r15, qword ptr [rsp + 40h] ;恢复原来刚进入时所有通用寄存器状态
+
+		wrmsr ;模拟执行指令
+
+		mov qword ptr [rsp + 40h], r15
+		mov qword ptr [rsp + 48h], r14
+		mov qword ptr [rsp + 50h], r13
+		mov qword ptr [rsp + 58h], r12
+		mov qword ptr [rsp + 60h], r11
+		mov qword ptr [rsp + 68h], r10
+		mov qword ptr [rsp + 70h], r9
+		mov qword ptr [rsp + 78h], r8
+		mov qword ptr [rsp + 80h], rbp
+		mov qword ptr [rsp + 88h], rdi
+		mov qword ptr [rsp + 90h], rsi
+		mov qword ptr [rsp + 98h], rdx
+		mov qword ptr [rsp + 100h], rcx
+		mov qword ptr [rsp + 108h], rbx
+		mov qword ptr [rsp + 110h], rdx ;把所有新的通用寄存器状态写回HOST临时栈
+		
+		pushfq
+		pop rcx ;保存新的RFLAGS
+		mov eax, GUEST_RFLAGS_INDEX
+		vmwrite rax, rcx ;把更新后的RFLAGS写回GUEST
+
+		mov rcx, qword ptr [rsp + 0h] ;获取指令长度
+		mov rax, qword ptr [rsp + 18h] ;获取指令地址
+		add rax, rcx ;步进RIP
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax ;把步进后的RIP写回GUEST
+
+		add rsp, 28h ;跳过RFLAGS/RIP/RSP这几个已经修改过或者无需修改的字段
+		
+		pop rcx
+		mov eax, GUEST_CR4_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR3_INDEX
+		vmwrite rax, rcx
+		pop rcx
+		mov eax, GUEST_CR0_INDEX
+		vmwrite rax, rcx ;把所有新的控制寄存器状态写回GUEST
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax ;恢复所有通用寄存器
+		
+NO_NEED_TO_EXECUTE:
+		add rsp, 118h
+		vmresume 
+EXCEPTION_NO_HITTED:
+		mov rcx, qword ptr [rsp + 10h]
+		push rcx
+		popfq ;恢复原来刚进入时的RFLAGS
+
+		mov rcx, qword ptr [rsp + 28h]
+		mov cr4, rcx
+		mov rcx, qword ptr [rsp + 30h]
+		mov cr3, rcx
+		mov rcx, qword ptr [rsp + 38h]
+		mov cr0, rcx ;恢复原来刚进入时的CR0/CR3和CR4
+
+		mov rcx, qword ptr [rsp + 20h]
+		mov DRIVER_RSP, rcx
+		mov rcx, qword ptr [rsp + 18h]
+		mov DRIVER_RIP, rcx ;记录原来刚进入时的RSP/RIP
+
+		add rsp, 40h
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax ;恢复原来刚进入时所有通用寄存器状态
+
+		vmxoff
+		mov rsp, DRIVER_RSP
+		mov ecx, EXIT_REASON
+		shl rcx, 16
+		call bugCheck
+	jmp DRIVER_RIP
+
+
+
+
+
+		mov __R15, r15
+		mov __R14, r14
+		mov __R13, r13
+		mov __R12, r12
+		mov __R11, r11
+		mov __R10, r10
+		mov __R9, r9
+		mov __R8, r8
+		mov __RBP, rbp
+		mov __RDI, rdi
+		mov __RSI, rsi
+		mov __RDX, rdx
+		mov __RCX, rcx
+		mov __RBX, rbx
+		mov __RAX, rax ;把所有新的通用寄存器状态写回HOST临时栈
+
+		mov rax, __RAX
+		mov rbx, __RBX
+		mov rcx, __RCX
+		mov rdx, __RDX
+		mov rsi, __RSI
+		mov rdi, __RDI
+		mov rbp, __RBP
+		mov r8,  __R8
+		mov r9,  __R9
+		mov r10, __R10
+		mov r11, __R11
+		mov r12, __R12
+		mov r13, __R13
+		mov r14, __R14
+		mov r15, __R15
+
+
+		__vsm__hostEntry PROC
+		sub rsp, 300h
+		push rsp
+		push rax
+		push rbx
+		push rcx
+		push rdx
+		push rsi
+		push rdi
+		push rbp
+		push r8
+		push r9
+		push r10
+		push r11
+		push r12
+		push r13
+		push r14
+		push r15
+		mov ecx, GUEST_CR0_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_CR3_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_CR4_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		push rcx		
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov rcx, qword ptr [rsp + 8h]
+		mov EXIT_REASON, ecx
+
+		cmp EXIT_REASON, 10
+	jz  CPUID_EXIT
+	;	cmp EXIT_REASON, 11
+	;jz  GETSEC_EXIT
+	;	cmp EXIT_REASON, 13
+	;jz  INVD_EXIT
+		cmp EXIT_REASON, 31
+	jz  RDMSR_EXIT
+		cmp EXIT_REASON, 32
+	jz  WRMSR_EXIT
+	;	cmp EXIT_REASON, 50
+	;jz  INVEPT_EXIT
+	;	cmp EXIT_REASON, 53
+	;jz  INVVPID_EXIT
+	;	cmp EXIT_REASON, 55
+	;jz  XSETBV_EXIT
+		mov rcx, qword ptr [rsp + 10h]
+		push rcx
+		popfq
+
+		mov rcx, qword ptr [rsp + 18h]
+		mov rcx, qword ptr [rcx]
+		call bugCheck
+;GETSEC_EXIT:
+;INVD_EXIT:
+;INVEPT_EXIT:
+;INVVPID_EXIT:
+;XSETBV_EXIT:
+		;vmxoff 
+		;int 3
+CPUID_EXIT:	
+		call bugCheck
+		mov rax, qword ptr [rsp + 0B0h]
+		mov rcx, qword ptr [rsp + 0A0h]
+		cpuid
+		mov qword ptr [rsp + 0B0h], rax
+		mov qword ptr [rsp + 0A8h], rbx
+		mov qword ptr [rsp + 0A0h], rcx
+		mov qword ptr [rsp + 098h], rdx
+		
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		
+		mov rcx, qword ptr [rax]
+
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+
+		vmresume
+RDMSR_EXIT:		
+		call bugCheck
+		mov rcx, qword ptr [rsp + 0A0h]
+		rdmsr
+		mov qword ptr [rsp + 0B0h], rax
+		mov qword ptr [rsp + 98h], rdx
+		
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		
+		mov rcx, qword ptr [rax]
+		call bugCheck
+
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+
+		vmresume
+WRMSR_EXIT:
+		call bugCheck
+		mov rax, qword ptr [rsp + 0B0h]
+		mov rcx, qword ptr [rsp + 0A0h]
+		mov rdx, qword ptr [rsp + 98h]
+		wrmsr
+		
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		
+		mov rcx, qword ptr [rax]
+		call bugCheck
+
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+	
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+
+		vmresume
+	__vsm__hostEntry ENDP
+
+	__vsm__hostEntry PROC
+		sub rsp, 300h
+		push rsp
+		push rax
+		push rbx
+		push rcx
+		push rdx
+		push rsi
+		push rdi
+		push rbp
+		push r8
+		push r9
+		push r10
+		push r11
+		push r12
+		push r13
+		push r14
+		push r15
+		mov ecx, GUEST_CR0_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_CR3_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_CR4_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		push rcx		
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		push rcx
+
+		mov ax, word ptr [rsp + 8h]
+		mov EXIT_REASON, ax
+
+		cmp EXIT_REASON, 10
+	jz  CPUID_EXIT
+		cmp EXIT_REASON, 11
+	jz  GETSEC_EXIT
+		cmp EXIT_REASON, 13
+	jz  INVD_EXIT
+		cmp EXIT_REASON, 31
+	jz  RDMSR_EXIT
+		cmp EXIT_REASON, 32
+	jz  WRMSR_EXIT
+		cmp EXIT_REASON, 50
+	jz  INVEPT_EXIT
+		cmp EXIT_REASON, 53
+	jz  INVVPID_EXIT
+		cmp EXIT_REASON, 55
+	jz  XSETBV_EXIT
+GETSEC_EXIT:
+INVD_EXIT:
+INVEPT_EXIT:
+INVVPID_EXIT:
+XSETBV_EXIT:
+		int 3
+		mov rcx, qword ptr [rsp + 18h]
+		mov rcx, qword ptr [rcx]
+		call bugCheck
+		vmxoff 
+CPUID_EXIT:
+		cmp qword ptr [rsp + 0B0h], 2668AAAAh
+	jz  HOOK_CPUID
+		mov rax, qword ptr [rsp + 0B0h]
+		mov rcx, qword ptr [rsp + 0A0h]
+		cpuid
+		mov qword ptr [rsp + 0B0h], rax
+		mov qword ptr [rsp + 0A8h], rbx
+		mov qword ptr [rsp + 0A0h], rcx
+		mov qword ptr [rsp + 098h], rdx
+		jmp ADD_RIP
+	HOOK_CPUID:
+		mov qword ptr [rsp + 0B0h], 0DEADBEEFh
+		mov qword ptr [rsp + 0A8h], 0DEADBEEFh
+		mov qword ptr [rsp + 0A0h], 0DEADBEEFh
+		mov qword ptr [rsp + 098h], 0DEADBEEFh
+	ADD_RIP:
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+		vmresume
+RDMSR_EXIT:
+		mov rcx, qword ptr [rsp + 0A0h]
+		rdmsr
+		mov qword ptr [rsp + 0B0h], rax
+		mov qword ptr [rsp + 98h], rdx
+
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+		vmresume
+WRMSR_EXIT:
+		mov rax, qword ptr [rsp + 0B0h]
+		mov rcx, qword ptr [rsp + 0A0h]
+		mov rdx, qword ptr [rsp + 98h]
+		wrmsr
+		
+		mov rcx, qword ptr [rsp + 0h]
+		mov rax, qword ptr [rsp + 18h]
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+	
+		add rsp, 40h
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		add rsp, 308h
+		vmresume
+	__vsm__hostEntry ENDP
+
+		__vsm__hostEntry PROC
+					push rax
+					push rbx
+					push rcx
+					push rdx
+					push rsi
+					push rdi
+					push rbp
+					push r8
+					push r9
+					push r10
+					push r11
+					push r12
+					push r13
+					push r14
+					push r15
+					mov ecx, GUEST_RIP_INDEX
+					vmread rcx, rcx
+					push rcx		
+					mov ecx, GUEST_RFLAGS_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, VM_EXIT_REASON_INDEX
+					vmread rcx, rcx
+					push rcx
+					mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+					vmread rcx, rcx
+					push rcx
+					
+					mov rbp, rsp
+
+					mov r11, 68h
+					sub rsp, r11 ;因为有call bugCheck，所以不得不减去x8h去对齐堆栈
+
+					mov ax, word ptr [rbp + 8h]
+					mov EXIT_REASON, ax
+
+					mov ecx, GUEST_FS_BASE_INDEX
+					vmread rcx, rcx
+					test rcx, rcx
+			jnz	CAPABILITY_MODE
+					cmp EXIT_REASON, 10
+				jz  CPUID_EXIT
+					cmp EXIT_REASON, 11
+				jz  GETSEC_EXIT
+					cmp EXIT_REASON, 13
+				jz  INVD_EXIT
+					cmp EXIT_REASON, 18
+				jz  VMCALL_EXIT
+					cmp EXIT_REASON, 31
+				jz  RDMSR_EXIT
+					cmp EXIT_REASON, 32
+				jz  WRMSR_EXIT
+					cmp EXIT_REASON, 50
+				jz  INVEPT_EXIT
+					cmp EXIT_REASON, 53
+				jz  INVVPID_EXIT
+					cmp EXIT_REASON, 55
+				jz  XSETBV_EXIT
+			GETSEC_EXIT:
+			INVD_EXIT:
+			INVEPT_EXIT:
+			INVVPID_EXIT:
+			XSETBV_EXIT:
+					int 3
+					mov rcx, qword ptr [rbp + 18h]
+					mov rcx, qword ptr [rcx]
+					call bugCheck
+					vmxoff 
+			CPUID_EXIT:
+					cmp qword ptr [rbp + 90h], 22224444h
+			jz HOOK_CPUID
+					mov rax, qword ptr [rbp + 90h]
+					mov rcx, qword ptr [rbp + 80h]
+					cpuid
+					mov qword ptr [rbp + 90h], rax
+					mov qword ptr [rbp + 88h], rbx
+					mov qword ptr [rbp + 80h], rcx
+					mov qword ptr [rbp + 78h], rdx
+					jmp STEP_RIP
+			HOOK_CPUID:
+					mov rcx, gs: [20h]
+					mov ecx, dword ptr [rcx + 24h]
+					inc ecx
+					shl ecx, 16
+					or ecx, 0FFFFh
+					mov qword ptr [rbp + 90h], rcx
+					mov qword ptr [rbp + 88h], 0ABABABABh
+					mov qword ptr [rbp + 80h], 0CDCDCDCDh
+					mov qword ptr [rbp + 78h], 0EFEFEFEFh
+			STEP_RIP:
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+			RDMSR_EXIT:
+					mov rcx, qword ptr [rbp + 80h]
+					rdmsr
+					mov qword ptr [rbp + 90h], rax
+					mov qword ptr [rbp + 78h], rdx
+
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+			WRMSR_EXIT:
+					mov rax, qword ptr [rbp + 90h]
+					mov rcx, qword ptr [rbp + 80h]
+					mov rdx, qword ptr [rbp + 78h]
+					wrmsr
+		
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+					
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+			VMCALL_EXIT:
+					mov rax, __RFLAGS
+					push rax
+					popfq
+					mov rax, __CR0
+					mov cr0, rax
+					mov rax, __CR3
+					mov cr3, rax
+					mov rax, __CR4
+					mov cr4, rax
+					mov rax, __RAX
+					mov rbx, __RBX
+					mov rcx, __RCX
+					mov rdx, __RDX
+					mov rsi, __RSI
+					mov rdi, __RDI
+					mov rsp, __RSP
+					mov rbp, __RBP
+					mov r8, __R8
+					mov r9, __R9
+					mov r10, __R10
+					mov r11, __R11
+					mov r12, __R12
+					mov r13, __R13
+					mov r14, __R14
+					mov r15, __R15
+					add rsp, 8
+					vmxoff
+					jmp DRIVER_RIP
+CAPABILITY_MODE:
+					cmp EXIT_REASON, 10
+				jz  CPUID_EXIT_CAPABILITY
+					cmp EXIT_REASON, 11
+				jz  GETSEC_EXIT_CAPABILITY
+					cmp EXIT_REASON, 13
+				jz  INVD_EXIT_CAPABILITY
+					cmp EXIT_REASON, 31
+				jz  RDMSR_EXIT_CAPABILITY
+					cmp EXIT_REASON, 32
+				jz  WRMSR_EXIT_CAPABILITY
+					cmp EXIT_REASON, 50
+				jz  INVEPT_EXIT_CAPABILITY
+					cmp EXIT_REASON, 53
+				jz  INVVPID_EXIT_CAPABILITY
+					cmp EXIT_REASON, 55
+				jz  XSETBV_EXIT_CAPABILITY
+			GETSEC_EXIT_CAPABILITY:
+			INVD_EXIT_CAPABILITY:
+			INVEPT_EXIT_CAPABILITY:
+			INVVPID_EXIT_CAPABILITY:
+			XSETBV_EXIT_CAPABILITY:
+					int 3
+					mov rcx, qword ptr [rbp + 18h]
+					mov rcx, qword ptr [rcx]
+					call bugCheck
+					vmxoff 
+			CPUID_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rax, qword ptr [rbp + 90h]
+					mov rcx, qword ptr [rbp + 80h]
+					cpuid
+					mov qword ptr [rbp + 90h], rax
+					mov qword ptr [rbp + 88h], rbx
+					mov qword ptr [rbp + 80h], rcx
+					mov qword ptr [rbp + 78h], rdx
+
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+			RDMSR_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rcx, qword ptr [rbp + 80h]
+					rdmsr
+					mov qword ptr [rbp + 90h], rax
+					mov qword ptr [rbp + 78h], rdx
+
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+			WRMSR_EXIT_CAPABILITY:
+					mov ax, fs
+					mov fs, ax
+
+					mov rax, qword ptr [rbp + 90h]
+					mov rcx, qword ptr [rbp + 80h]
+					mov rdx, qword ptr [rbp + 78h]
+					wrmsr
+		
+					mov rcx, qword ptr [rbp + 0h]
+					mov rax, qword ptr [rbp + 18h]
+					add rax, rcx
+					mov ecx, GUEST_RIP_INDEX
+					vmwrite rcx, rax
+					
+					mov rsp, rbp
+					add rsp, 20h
+
+					pop r15
+					pop r14
+					pop r13
+					pop r12
+					pop r11
+					pop r10
+					pop r9
+					pop r8
+					pop rbp
+					pop rdi
+					pop rsi
+					pop rdx
+					pop rcx
+					pop rbx
+					pop rax
+
+					vmresume
+	__vsm__hostEntry ENDP
+
+	mov rcx, cr0
+		push rcx
+		mov rcx, cr2
+		push rcx
+		mov rcx, cr3
+		push rcx
+		mov rcx, cr4
+		push rcx
+		mov rcx, cr8
+		push rcx
+		mov rcx, dr0
+		push rcx
+		mov rcx, dr1
+		push rcx
+		mov rcx, dr2
+		push rcx
+		mov rcx, dr3
+		push rcx
+		mov rcx, dr6
+		push rcx
+		mov rcx, dr7
+		push rcx
+
+
+		
+		pop rax
+		mov dr7, rax
+		pop rax
+		mov dr6, rax
+		pop rax
+		mov dr3, rax
+		pop rax
+		mov dr2, rax
+		pop rax
+		mov dr1, rax
+		pop rax
+		mov dr0, rax
+		pop rax
+		mov cr8, rax
+		pop rax
+		mov cr4, rax
+		pop rax
+		mov cr3, rax
+		pop rax
+		mov cr2, rax
+		pop rax
+		mov cr0, rax
+
+		
+
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+		pop qword ptr [rax + 0A8h]		
+		
+		mov eax, GUEST_RSP_INDEX
+		vmread rsp, rax
+
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+		mov rax, qword ptr [rax + 0A8h]
+
+
+			__vsm__hostEntry PROC
+		push rax
+		push rbx
+		push rcx
+		push rdx
+		push rsi
+		push rdi
+		push rbp
+		push r8
+		push r9
+		push r10
+		push r11
+		push r12
+		push r13
+		push r14
+		push r15 ;x8h
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		push rcx		
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		push rcx ;x8h
+
+		mov rbp, rsp
+
+		mov rcx, cr0
+		push rcx
+		mov rcx, cr2
+		push rcx
+		mov rcx, cr3
+		push rcx
+		mov rcx, cr4
+		push rcx
+		mov rcx, cr8
+		push rcx
+		mov rcx, dr0
+		push rcx
+		mov rcx, dr1
+		push rcx
+		mov rcx, dr2
+		push rcx
+		mov rcx, dr3
+		push rcx
+		mov rcx, dr6
+		push rcx
+		mov rcx, dr7
+		push rcx ;x0h
+
+		sub rsp, 240h ;x0h
+		fxsave qword ptr [rsp] ;至少需要200h(= 512)字节的空间
+		sub rsp, 400h ;x0h
+				
+		mov ax, fs				;确保x86模式的兼容性
+		mov fs, ax
+
+		call VM_EXIT_HANDLER
+
+		mov rcx, qword ptr [rbp + 0h]
+		mov rax, qword ptr [rbp + 18h]
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+		
+		add rsp, 400h ;x0h
+		fxrstor qword ptr [rsp]
+		add rsp, 240h ;x0h
+
+		pop rax
+		mov dr7, rax
+		pop rax
+		mov dr6, rax
+		pop rax
+		mov dr3, rax
+		pop rax
+		mov dr2, rax
+		pop rax
+		mov dr1, rax
+		pop rax
+		mov dr0, rax
+		pop rax
+		mov cr8, rax
+		pop rax
+		mov cr4, rax
+		pop rax
+		mov cr3, rax
+		pop rax
+		mov cr2, rax
+		pop rax
+		mov cr0, rax ;x8h
+
+		add rsp, 20h
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		vmresume
+	__vsm__hostEntry ENDP
+
+		__vsm__hostEntry PROC
+		push rax
+		push rbx
+		push rcx
+		push rdx
+		push rsi
+		push rdi
+		push rbp
+		push r8
+		push r9
+		push r10
+		push r11
+		push r12
+		push r13
+		push r14
+		push r15 ;x8h
+		mov ecx, GUEST_RIP_INDEX
+		vmread rcx, rcx
+		push rcx		
+		mov ecx, GUEST_RFLAGS_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_EXIT_REASON_INDEX
+		vmread rcx, rcx
+		push rcx
+		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
+		vmread rcx, rcx
+		push rcx ;x8h
+
+		mov rbp, rsp
+
+		mov rcx, cr0
+		push rcx
+		mov rcx, cr2
+		push rcx
+		mov rcx, cr3
+		push rcx
+		mov rcx, cr4
+		push rcx
+		mov rcx, cr8
+		push rcx
+		mov rcx, dr0
+		push rcx
+		mov rcx, dr1
+		push rcx
+		mov rcx, dr2
+		push rcx
+		mov rcx, dr3
+		push rcx
+		mov rcx, dr6
+		push rcx
+		mov rcx, dr7
+		push rcx ;x0h
+
+		sub rsp, 240h ;x0h
+		fxsave qword ptr [rsp] ;至少需要200h(= 512)字节的空间
+		sub rsp, 400h ;x0h
+				
+		mov ax, fs				;确保x86模式的兼容性
+		mov fs, ax
+
+		cmp word ptr [rbp + 8h], 18
+	jz  VMCALL_EXIT
+
+		call VM_EXIT_HANDLER
+
+		mov rcx, qword ptr [rbp + 0h]
+		mov rax, qword ptr [rbp + 18h]
+		add rax, rcx
+		mov ecx, GUEST_RIP_INDEX
+		vmwrite rcx, rax
+		
+		add rsp, 400h ;x0h
+		fxrstor qword ptr [rsp]
+		add rsp, 240h ;x0h
+
+		pop rax
+		mov dr7, rax
+		pop rax
+		mov dr6, rax
+		pop rax
+		mov dr3, rax
+		pop rax
+		mov dr2, rax
+		pop rax
+		mov dr1, rax
+		pop rax
+		mov dr0, rax
+		pop rax
+		mov cr8, rax
+		pop rax
+		mov cr4, rax
+		pop rax
+		mov cr3, rax
+		pop rax
+		mov cr2, rax
+		pop rax
+		mov cr0, rax ;x8h
+
+		add rsp, 20h
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi
+		pop rdx
+		pop rcx
+		pop rbx
+		pop rax
+
+		vmresume
+	__vsm__hostEntry ENDP
+
+	VM_EXIT_HANDLER PROC
+		sub rsp, 48h
+
+		cmp word ptr [rbp + 8h], 10
+	jz  REASON_CPUID
+		cmp word ptr [rbp + 8h], 18
+	jz  REASON_VMCALL
+		cmp word ptr [rbp + 8h], 31
+	jz  REASON_RDMSR
+		cmp word ptr [rbp + 8h], 32
+	jz  REASON_WRMSR
+		mov rcx, qword ptr [rbp + 8h] ;VM_EXIT_REASON
+		or rcx, 0ABCD0000h
+		call bugCheck
+
+REASON_CPUID:
+		call CPUID_EXIT
+	jmp RETURN
+REASON_VMCALL:
+		call VMCALL_EXIT
+	jmp RETURN
+REASON_RDMSR:
+		call RDMSR_EXIT
+	jmp RETURN
+REASON_WRMSR:
+		call WRMSR_EXIT
+	jmp RETURN
+
+RETURN:
+		add rsp, 48h
+		ret
+	VM_EXIT_HANDLER ENDP
+
+	CPUID_EXIT PROC
+		sub rsp, 68h
+		cmp qword ptr [rbp + 90h], 01ACBCCCDh
+	jz  CPUID_SPECIAL_HANDLING
+		mov rax, qword ptr [rbp + 90h]
+		mov rcx, qword ptr [rbp + 80h]
+		cpuid
+		mov qword ptr [rbp + 90h], rax
+		mov qword ptr [rbp + 88h], rbx
+		mov qword ptr [rbp + 80h], rcx
+		mov qword ptr [rbp + 78h], rdx
+		add rsp, 68h
+		ret
+CPUID_SPECIAL_HANDLING:
+		add rsp, 68h
+		ret
+	CPUID_EXIT ENDP
+
+	RDMSR_EXIT PROC
+		sub rsp, 68h
+		mov rcx, qword ptr [rbp + 80h]
+		rdmsr
+		mov qword ptr [rbp + 90h], rax
+		mov qword ptr [rbp + 78h], rdx
+		add rsp, 68h
+		ret
+	RDMSR_EXIT ENDP
+
+	WRMSR_EXIT PROC
+		sub rsp, 68h
+		mov rax, qword ptr [rbp + 90h]
+		mov rcx, qword ptr [rbp + 80h]
+		mov rdx, qword ptr [rbp + 78h]
+		wrmsr
+		add rsp, 68h
+		ret
+	WRMSR_EXIT ENDP
+
+	VMCALL_EXIT PROC
+		sub rsp, 68h
+
+		mov rax, qword ptr [rbp + 10h]
+		push rax
+		popfq
+
+		mov rsp, rbp
+
+		sub rsp, 58h
+
+		sub rsp, 240h
+		fxrstor qword ptr [rsp]  ;至少需要200h字节的空间
+		add rsp, 240h
+
+		pop rax
+		mov dr7, rax
+		pop rax
+		mov dr6, rax
+		pop rax
+		mov dr3, rax
+		pop rax
+		mov dr2, rax
+		pop rax
+		mov dr1, rax
+		pop rax
+		mov dr0, rax
+		pop rax
+		mov cr8, rax
+		pop rax
+		mov cr4, rax
+		pop rax
+		mov cr3, rax
+		pop rax
+		mov cr2, rax
+		pop rax
+		mov cr0, rax
+
+		add rsp, 20h
+
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop r11
+		pop r10
+		pop r9
+		pop r8
+		pop rbp
+		pop rdi
+		pop rsi 
+		pop rdx
+		pop rcx
+		pop rbx
+		
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+		pop qword ptr [rax + 0A8h]		
+		
+		mov eax, GUEST_RSP_INDEX
+		vmread rsp, rax
+
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+		mov rax, qword ptr [rax + 0A8h]
+
+		vmxoff
+		ret ;注意此时的rsp == GUEST_RSP, ret指令返回到的是GUEST.
+	VMCALL_EXIT ENDP
+
+
+
+	MTF_EXIT PROC
+		sub rsp, 68h
+		mov qword ptr [rbp + 0h], 0 ;MTF不需要步进RIP
+
+		mov rcx, qword ptr [rbp + 18h]
+		cmp byte ptr [rcx], 0C3h
+	jz	CLEAR_MTF_MARK
+		mov eax, VM_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS
+		mov rcx, 8C006172h
+		vmwrite rax, rcx
+		add rsp, 68h
+		ret
+CLEAR_MTF_MARK:
+		mov eax, VM_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS
+		mov rcx, 84006172h
+		vmwrite rax, rcx
+		add rsp, 68h
+		ret
+	MTF_EXIT ENDP
+	
+	INVLPG_EXIT PROC
+		sub rsp, 68h
+
+		;33 ?? ?? 23 ?? ?? 33
+		mov rax, qword ptr [rbp + 18h]
+		sub rax, 50
+		xor rcx, rcx               
+
+SEARCH_LOOP:
+		cmp rcx, 50				    
+		jg SEARCH_COMPLETE        
+
+		cmp byte ptr [rax + rcx], 33h
+		jne NEXT_BYTE
+
+		cmp byte ptr [rax + rcx + 3], 23h
+		jne NEXT_BYTE
+
+		cmp byte ptr [rax + rcx + 6], 33h
+		jne NEXT_BYTE
+
+		mov rcx, debugWindow
+		inc qword ptr [rcx] ;调试窗口的计数器+1
+
+		mov rcx, 4A4B556Bh
+		call bugCheck
+
+NEXT_BYTE:
+		inc rcx
+		jmp SEARCH_LOOP
+
+SEARCH_COMPLETE:
+		mov ecx, VM_EXIT_QUALIFICATION_INDEX
+		vmread rcx, rcx
+		invlpg qword ptr [rcx]
+		
+		add rsp, 68h
+		ret
+	INVLPG_EXIT ENDP
+
+	;invpcid rax,oword ptr [rsp+20h] 18:21: regIndex; 23:26: baseRegIndex. Qualification: offset(displacement).
+	INVPCID_EXIT PROC
+		sub rsp, 68h
+		mov rax, qword ptr [rbp + 90h]
+		mov ecx, GUEST_RSP_INDEX
+		vmread rcx, rcx
+		mov edx, VM_EXIT_QUALIFICATION_INDEX
+		vmread rdx, rdx
+		add rcx, rdx
+		invpcid rax, oword ptr [rcx]
+		add rsp, 68h
+		ret
+	INVPCID_EXIT ENDP
+
+	void findCaller(ULONG_PTR _rip, ULONG_PTR _kprcb, ULONG_PTR _rbp)
+{
+	UNREFERENCED_PARAMETER(_rbp);
+	if ((LONG64)_rip < 0) //_rip == 0xFFFF........;
+	{
+		DbgPrint("caller from kernel!\n");
+	}
+	else
+	{
+		if ((_rip & (0xFFFFull << 48)) != 0)
+		{
+			KeBugCheckEx(0xCCCC8888, 0, 0, 0, 0); //non-cardinal address
+		}
+		else
+		{
+			ULONG_PTR pCurrentThreadAddress = _kprcb + 0x8;
+			ULONG_PTR pCurrentThread = *(ULONG_PTR*)pCurrentThreadAddress;
+			ULONG_PTR pTebAddress = pCurrentThread + 0xF0;
+			ULONG_PTR pTeb = *(ULONG_PTR*)pTebAddress; //注意pTeb已经不是内核地址了！
+			ULONG64 guestCr3 = 0;
+			__vmx_vmread(GUEST_CR3, &guestCr3);
+			ULONG_PTR pTebPa = getPhysicalAddressByCR3AndVirtualAddress(guestCr3, pTeb);
+			ULONG64 pid = 0;
+			readPhysicalAddress((PVOID)(pTebPa + 0x40), &pid, sizeof(ULONG64), NULL);
+			if (!isCpuidExistedInList(pid))
+			{
+				DbgPrint("new pid %llX found, now exists: %zu\n", pid, ++totalNums);
+				PCPUID_INFO_PT newer = NULL;
+				initCpuidPt(&newer, pid);
+				insertNewCpuidPt(&newer->listEntry);
+			}
+			else
+			{
+				increaseCpuidAccessTimes(pid);
+			}
+		}
+	}
+	return;
+}
+
+typedef struct _CPUID_INFO_PT
+{
+	ULONG64 pid;
+	SIZE_T accessTimes;
+	LIST_ENTRY listEntry;
+}CPUID_INFO_PT, *PCPUID_INFO_PT;
+
+LIST_ENTRY cpuidPtListHead = { 0 };
+
+void initCpuidListHead()
+{
+	cpuidPtListHead.Flink = &cpuidPtListHead;
+	cpuidPtListHead.Blink = &cpuidPtListHead;
+	return;
+}
+
+void initCpuidPt(PCPUID_INFO_PT* cpuidPt, ULONG64 pid)
+{
+	*cpuidPt = (PCPUID_INFO_PT)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(CPUID_INFO_PT), 'tupc');
+	if (*cpuidPt)
+	{
+		RtlZeroMemory(*cpuidPt, sizeof(CPUID_INFO_PT));
+		(*cpuidPt)->pid = pid;
+		(*cpuidPt)->accessTimes = 1;
+		(*cpuidPt)->listEntry.Flink = &(*cpuidPt)->listEntry;
+		(*cpuidPt)->listEntry.Blink = &(*cpuidPt)->listEntry;
+	}
+	else
+	{
+		KeBugCheckEx(0x5C5C66CC, 0, 0, 0, 0);
+	}
+	return;
+}
+
+void insertNewCpuidPt(PLIST_ENTRY newCpuidPtListEntry)
+{
+	PLIST_ENTRY temp = &cpuidPtListHead;
+	temp = temp->Blink;
+	temp->Flink = newCpuidPtListEntry;
+	newCpuidPtListEntry->Flink = &cpuidPtListHead;
+	cpuidPtListHead.Blink = newCpuidPtListEntry;
+	newCpuidPtListEntry->Blink = temp;
+	return;
+}
+
+void increaseCpuidAccessTimes(ULONG64 pid)
+{
+	PLIST_ENTRY temp = &cpuidPtListHead;
+	PLIST_ENTRY head = temp->Flink;
+	while (head != &cpuidPtListHead)
+	{
+		if (CONTAINING_RECORD(head, CPUID_INFO_PT, listEntry)->pid == pid)
+		{
+			CONTAINING_RECORD(head, CPUID_INFO_PT, listEntry)->accessTimes++;
+			break;
+		}
+		head = head->Flink;
+	}
+	return;
+}
+
+BOOLEAN isCpuidExistedInList(ULONG64 pid)
+{
+	PLIST_ENTRY temp = &cpuidPtListHead;
+	PLIST_ENTRY head = temp->Flink;
+	while (head != &cpuidPtListHead)
+	{
+		if (CONTAINING_RECORD(head, CPUID_INFO_PT, listEntry)->pid == pid)
+		{
+			return 1;
+		}
+		head = head->Flink;
+	}
+	return 0;
+}
+
+NTSTATUS readPhysicalAddress(
+	IN PVOID physicalAddress,
+	IN PVOID receivedBuffer,
+	IN SIZE_T readSize,
+	SIZE_T* bytesTransferred
+)
+{
+	MM_COPY_ADDRESS Read = { 0 };
+	Read.PhysicalAddress.QuadPart = (LONG64)physicalAddress;
+	if (bytesTransferred == NULL)
+	{
+		SIZE_T ret = 0;
+		return MmCopyMemory(receivedBuffer, Read, readSize, MM_COPY_MEMORY_PHYSICAL, &ret);
+	}
+	else
+	{
+		return MmCopyMemory(receivedBuffer, Read, readSize, MM_COPY_MEMORY_PHYSICAL, bytesTransferred);
+	}
+}
+
+ULONG_PTR getPhysicalAddressByCR3AndVirtualAddress(
+	IN ULONG64 cr3,
+	IN ULONG_PTR VirtualAddress
+)
+{
+	cr3 = (cr3 >> 12) << 12;
+	ULONG_PTR ultimatePhysicalAddress = 0;
+	ULONG_PTR ultimatePhysicalAddressPageHeader = 0;
+	ULONG_PTR VPO = (VirtualAddress << 52) >> 52;
+	ULONG_PTR PFN4 = ((VirtualAddress << 43) >> 43) >> 12;
+	ULONG_PTR PFN3 = ((VirtualAddress << 34) >> 34) >> 21;
+	ULONG_PTR PFN2 = ((VirtualAddress << 25) >> 25) >> 30;
+	ULONG_PTR PFN1 = ((VirtualAddress << 16) >> 16) >> 39;
+	SIZE_T ret = 0;
+	ULONG_PTR a = 0, b = 0, c = 0;
+	readPhysicalAddress((PVOID)(cr3 + 8 * PFN1), &a, sizeof(ULONG_PTR), &ret);
+	if (ret == 0) return 0;
+	a = (((a << 24) >> 24) >> 12) << 12;
+	readPhysicalAddress((PVOID)(a + 8 * PFN2), &b, sizeof(ULONG_PTR), &ret);
+	if (ret == 0) return 0;
+	b = (((b << 24) >> 24) >> 12) << 12;
+	readPhysicalAddress((PVOID)(b + 8 * PFN3), &c, sizeof(ULONG_PTR), &ret);
+	if (ret == 0) return 0;
+	c = (((c << 24) >> 24) >> 12) << 12;
+	readPhysicalAddress((PVOID)(c + 8 * PFN4), &ultimatePhysicalAddressPageHeader, sizeof(ULONG_PTR), &ret);
+	if (ret == 0) return 0;
+	ultimatePhysicalAddressPageHeader = (((ultimatePhysicalAddressPageHeader << 24) >> 24) >> 12) << 12;
+	ultimatePhysicalAddress = ultimatePhysicalAddressPageHeader + VPO;
+	return ultimatePhysicalAddress;
+}
+
+
+
+/*PLIST_ENTRY temp = &cpuidPtListHead;
+	PLIST_ENTRY head = temp->Flink;
+	PCPUID_INFO_PT currCpuidPt = NULL;
+	if (head == temp)
+	{
+		return;
+	}
+	while (head != &cpuidPtListHead)
+	{
+		currCpuidPt = CONTAINING_RECORD(head, CPUID_INFO_PT, listEntry);
+		PEPROCESS pe = NULL;
+		KAPC_STATE apc = { 0 };
+		CHAR processName[16] = { 0 };
+		PsLookupProcessByProcessId((HANDLE)currCpuidPt->pid, &pe);
+		KeStackAttachProcess(pe, &apc);
+		RtlCopyMemory(processName, (PVOID)((ULONG_PTR)pe + 0x5A8), 15);
+		DbgPrint("[+] [pid]: %llX | [process name]: %s | [access cpuid times]: %zu\n", currCpuidPt->pid, processName, currCpuidPt->accessTimes);
+		KeUnstackDetachProcess(&apc);
+		ObDereferenceObject(pe);
+		head = head->Flink;
+	}
+	temp = cpuidPtListHead.Flink;
+	while (temp != &cpuidPtListHead)
+	{
+		currCpuidPt = CONTAINING_RECORD(temp, CPUID_INFO_PT, listEntry);
+		temp = temp->Flink;
+
+		currCpuidPt->listEntry.Blink->Flink = currCpuidPt->listEntry.Flink;
+		currCpuidPt->listEntry.Flink->Blink = currCpuidPt->listEntry.Blink;
+
+		RtlZeroMemory(currCpuidPt, sizeof(CPUID_INFO_PT));
+		ExFreePool(currCpuidPt);
+		currCpuidPt = NULL;
+	}
+	initCpuidListHead();*/
+
+	pop rax
+		mov dr7, rax
+		pop rax
+		mov dr6, rax
+		pop rax
+		mov dr3, rax
+		pop rax
+		mov dr2, rax
+		pop rax
+		mov dr1, rax
+		pop rax
+		mov dr0, rax
+		pop rax
+		mov cr8, rax
+		pop rax
+		mov cr4, rax
+		pop rax
+		mov cr3, rax
+		pop rax
+		mov cr2, rax
+		pop rax
+		mov cr0, rax
+
+
+VOID getSegementRegisterAttributes(
+	IN SEGEMENT_TYPE type,
+	IN ULONG64 selector,
+	IN UCHAR unusable,
+	IN OUT SRA* sra
+)
+{
+	ULONG_PTR GDTbase = __vsm__getGDTbase();
+	ULONG64 index = selector >> 3;
+	ULONG_PTR currentSelectorGdtEntryPointer = GDTbase + index * 8; //8: magic number defined in INTEL® SDL
+	ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
+	sra->selector = (USHORT)selector;
+	sra->baseAddress = 0;
+	sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
+	if (type == 'tr')
+	{
+		sra->baseAddress = (*(ULONG_PTR*)(currentSelectorGdtEntryPointer + 8)) << 32;
+		sra->baseAddress += (ULONG_PTR)(((currentSelectorGdtEntry >> 16) & 0xFFFFFFull) + ((currentSelectorGdtEntry & 0xFF00000000000000ull) >> 32));
+	}
+	if (unusable)
+	{
+		sra->accessRight |= 0x10000ul;
+	}
+	ULONG rawLimit = (ULONG)((currentSelectorGdtEntry & 0xFFFFull) | (((currentSelectorGdtEntry >> 48) & 0xFull) << 16));
+	if ((currentSelectorGdtEntry << 55) & 1ull)
+	{
+		sra->segementLimit = (rawLimit << 12) | 0xFFF; //4K
+	}
+	else
+	{
+		sra->segementLimit = rawLimit;
+	}
+	return;
+}
