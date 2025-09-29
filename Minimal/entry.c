@@ -1,4 +1,4 @@
-﻿#include "IA32.h"
+#include "IA32.h"
 
 #pragma warning(disable: 28182)
 #pragma warning(disable: 6387)
@@ -38,7 +38,7 @@ VOID getSegementRegisterAttributes(
 	IN SEGEMENT_TYPE type,
 	IN ULONG64 selector,
 	IN UCHAR unusable,
-	IN OUT SRA* sra
+	IN OUT SRA * sra
 )
 {
 	ULONG_PTR GDTbase = __vsm__getGDTbase();
@@ -47,8 +47,6 @@ VOID getSegementRegisterAttributes(
 	ULONG64 currentSelectorGdtEntry = *(ULONG64*)currentSelectorGdtEntryPointer;
 	sra->selector = (USHORT)selector;
 	sra->baseAddress = 0;
-	//64-bit模式会对fs的segementLimit作检查！
-	sra->segementLimit = (ULONG)((currentSelectorGdtEntry & 0xFFFFull));
 	sra->accessRight = (ULONG)((currentSelectorGdtEntry >> 40) & 0xFFFFull);
 	if (type == 'tr')
 	{
@@ -58,6 +56,15 @@ VOID getSegementRegisterAttributes(
 	if (unusable)
 	{
 		sra->accessRight |= 0x10000ul;
+	}
+	ULONG rawLimit = (ULONG)((currentSelectorGdtEntry & 0xFFFFull) | (((currentSelectorGdtEntry >> 48) & 0xFull) << 16));
+	if ((currentSelectorGdtEntry << 55) & 1ull)
+	{
+		sra->segementLimit = (rawLimit << 12) | 0xFFF; //4K
+	}
+	else
+	{
+		sra->segementLimit = rawLimit;
 	}
 	return;
 }
@@ -79,7 +86,7 @@ ULONG_PTR virtualization(ULONG_PTR arg)
 
 	SRA h_cs = { 0 }, h_ss = { 0 }, h_ds = { 0 }, h_es = { 0 }, h_fs = { 0 }, h_gs = { 0 }, h_ldtr = { 0 }, h_tr = { 0 };
 	SRA g_cs = { 0 }, g_ss = { 0 }, g_ds = { 0 }, g_es = { 0 }, g_fs = { 0 }, g_gs = { 0 }, g_ldtr = { 0 }, g_tr = { 0 };
-	
+
 	ULONG j = KeGetCurrentProcessorNumber();
 	KeSetSystemAffinityThread(1ull << j);
 	//开启CR4.VMXE位
@@ -126,12 +133,12 @@ ULONG_PTR virtualization(ULONG_PTR arg)
 	__vmx_vmwrite(HOST_GDTR_BASE_ADDRESS, (PVOID)__vsm__getGDTbase());
 	__vmx_vmwrite(HOST_IDTR_BASE_ADDRESS, (PVOID)__vsm__getIDTbase());
 	/*5.Guest-State Area字段*/
-	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs); 
+	getSegementRegisterAttributes('cs', __vsm__getCS(), 1, &g_cs);
 	getSegementRegisterAttributes('ss', __vsm__getSS(), 1, &g_ss);
 	getSegementRegisterAttributes('ds', __vsm__getDS(), 1, &g_ds);
 	getSegementRegisterAttributes('es', __vsm__getES(), 1, &g_es);
-	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs); 
-	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs); 
+	getSegementRegisterAttributes('fs', __vsm__getFS(), 0, &g_fs);
+	getSegementRegisterAttributes('gs', __vsm__getGS(), 0, &g_gs);
 	getSegementRegisterAttributes('ldtr', __vsm__getLDTR(), 1, &g_ldtr);
 	getSegementRegisterAttributes('tr', __vsm__getTR(), 0, &g_tr);
 	//选择子
@@ -180,9 +187,16 @@ VOID driverUnload(PDRIVER_OBJECT driverObject)
 {
 	UNREFERENCED_PARAMETER(driverObject);
 	KeIpiGenericCall(virtualOff, 0);
-	KeSetSystemAffinityThread(1ull << 0);
+	UCHAR dt[10] = { 0 };
 	for (size_t j = 0; j < totalCpuCount; j++)
 	{
+		KeSetSystemAffinityThread(1ull << j);
+		_sgdt(&dt);
+		*(USHORT*)dt = 0x57ui16;
+		_lgdt(&dt);
+		__sidt(&dt);
+		*(USHORT*)dt = 0xFFFui16;
+		__lidt(&dt);
 		ExFreePool(vCpu[j].virtualGuestStack);
 		vCpu[j].virtualGuestStack = NULL;
 		ExFreePool(vCpu[j].virtualHostStack);
@@ -192,6 +206,7 @@ VOID driverUnload(PDRIVER_OBJECT driverObject)
 		ExFreePool(vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS);
 		vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = NULL;
 	}
+	KeSetSystemAffinityThread(1ull << 0);
 	ExFreePool(vCpu);
 	vCpu = NULL;
 	ExFreePool(PER_CPU_REGS);
@@ -207,15 +222,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 
 	totalCpuCount = KeQueryActiveProcessorCount(NULL);
 	PER_CPU_REGS = (ULONG_PTR*)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(ULONG_PTR), 'zzaa');
-	
+
 	vCpu = (PVCPU)ExAllocatePoolWithTag(NonPagedPool, totalCpuCount * sizeof(VCPU), 'zzaa');
 	RtlZeroMemory(vCpu, totalCpuCount * sizeof(VCPU));
 
 	SIZE_T regionSizeNeeded = 0x1000;
-	ULONG vmcsIdentifier = (ULONG)4;
+	ULONG vmcsIdentifier = (ULONG)(__readmsr(IA32_VMX_BASIC) & ~(1ull << 31));
 	PHYSICAL_ADDRESS tempVmxon = { 0 };
 	PHYSICAL_ADDRESS tempVmcsRegion = { 0 };
-	
+
 	for (size_t j = 0; j < totalCpuCount; j++)
 	{
 		vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = ExAllocatePoolWithTag(NonPagedPool, regionSizeNeeded, 'zzaa');
@@ -228,12 +243,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		tempVmcsRegion = MmGetPhysicalAddress(vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS);
 		vCpu[j].VMX_VMCS_REGION_PHYSICAL_ADDRESS = tempVmcsRegion.QuadPart;
 
-		vCpu[j].virtualGuestStackSize = 0x11000;
+		vCpu[j].virtualGuestStackSize = 0x4000;
 		vCpu[j].virtualGuestStack = ExAllocatePoolWithTag(NonPagedPool, vCpu[j].virtualGuestStackSize, 'zzaa');
 		RtlZeroMemory(vCpu[j].virtualGuestStack, vCpu[j].virtualGuestStackSize);
 		vCpu[j].virtualGuestStackBottom = (PVOID)((ULONG_PTR)vCpu[j].virtualGuestStack + vCpu[j].virtualGuestStackSize - 0x1000);
 
-		vCpu[j].virtualHostStackSize = 0x11000;
+		vCpu[j].virtualHostStackSize = 0x4000;
 		vCpu[j].virtualHostStack = ExAllocatePoolWithTag(NonPagedPool, vCpu[j].virtualHostStackSize, 'zzaa');
 		RtlZeroMemory(vCpu[j].virtualHostStack, vCpu[j].virtualHostStackSize);
 		vCpu[j].virtualHostStackBottom = (PVOID)((ULONG_PTR)vCpu[j].virtualHostStack + vCpu[j].virtualHostStackSize - 0x1000);
@@ -242,9 +257,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 
 		*(ULONG*)vCpu[j].VMX_ON_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
 		*(ULONG*)vCpu[j].VMX_VMCS_REGION_VIRTUAL_KERNEL_ADDRESS = vmcsIdentifier;
-	}	
+	}
 
-	KeIpiGenericCall(virtualization, 0); //IPI_LEVEL = 0xE;
+	KeIpiGenericCall(virtualization, 0);
 
 	return STATUS_SUCCESS;
 }
