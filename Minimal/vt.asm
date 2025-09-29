@@ -12,11 +12,16 @@ EXTERN HOST_RSP_INDEX: DWORD
 EXTERN VM_EXIT_REASON_INDEX: DWORD
 EXTERN VM_EXIT_QUALIFICATION_INDEX: DWORD
 EXTERN VM_INSTRUCTION_LENGTH_INDEX: DWORD
-
 EXTERN PER_CPU_REGS: QWORD
 
 .code
 	
+	__vsm__getRAX PROC
+		mov rax, rax
+		ret
+	__vsm__getRAX ENDP
+
+
 	__vsm__INT3 PROC
 		int 3
 		ret
@@ -50,6 +55,16 @@ EXTERN PER_CPU_REGS: QWORD
 		ret
 	__vasm__setCR4VMXEBit ENDP
 
+	__vasm__clearCR4VMXEBit PROC
+		mov rax, cr4
+		mov ebx, 1
+		shl rbx, 13
+		not rbx
+		and rax, rbx
+		mov cr4, rax
+		ret
+	__vasm__clearCR4VMXEBit ENDP
+
 	__vsm__testX2APICmode PROC
 		mov eax, 1
 		cpuid
@@ -58,56 +73,10 @@ EXTERN PER_CPU_REGS: QWORD
 	__vsm__testX2APICmode ENDP
 
 	__vsm__vmlaunchSaveRegisters PROC
-		;cli
-		mov qword ptr [rsp + 8h], rax
-		mov qword ptr [rsp + 10h], rcx
-		mov rax, qword ptr [rsp] ;rip
-		mov qword ptr [rsp + 18h], rax
+		sub rsp, 38h
+		push rax
+		push rcx
 
-		mov rax, gs: [20h]
-		mov eax, dword ptr [rax + 24h] ;cpu index
-		shl eax, 3
-		mov rcx, PER_CPU_REGS
-		add rcx, rax
-
-		mov rcx, qword ptr [rcx] ;PER_CPU_REGS[cpu index]
-		mov rax, qword ptr [rsp + 8h]
-		mov qword ptr [rcx + 0h], rax  ;0
-		mov qword ptr [rcx + 8h], rbx  ;1
-		mov rax, qword ptr [rsp + 10h]
-		mov qword ptr [rcx + 10h], rax ;rcx (2)
-		mov qword ptr [rcx + 18h], rdx ;3
-		mov qword ptr [rcx + 20h], rsi ;4
-		mov qword ptr [rcx + 28h], rdi ;5
-		mov qword ptr [rcx + 30h], rsp ;6
-		mov qword ptr [rcx + 38h], rbp ;7
-		mov qword ptr [rcx + 40h], r8  ;8
-		mov qword ptr [rcx + 48h], r9  ;9
-		mov qword ptr [rcx + 50h], r10 ;10
-		mov qword ptr [rcx + 58h], r11 ;11
-		mov qword ptr [rcx + 60h], r12 ;12
-		mov qword ptr [rcx + 68h], r13 ;13
-		mov qword ptr [rcx + 70h], r14 ;14
-		mov qword ptr [rcx + 78h], r15 ;15
-		mov rax, cr0
-		mov qword ptr [rcx + 80h], rax ;16
-		mov rax, cr3
-		mov qword ptr [rcx + 88h], rax ;17
-		mov rax, cr4
-		mov qword ptr [rcx + 90h], rax ;18
-		pushfq
-		pop rax
-		mov qword ptr [rcx + 98h], rax ;19
-		mov rax, qword ptr [rcx + 18h]
-		mov qword ptr [rcx + 0A0h], rax ;20
-		;sti
-		vmlaunch
-		mov ecx, 2222AAAAh
-		call bugCheck
-	__vsm__vmlaunchSaveRegisters ENDP
-
-	__vsm__guestEntry PROC
-		;当前CPU的RSP为 GUEST_RSP，是GUEST外部分配的那个栈底
 		mov rax, gs: [20h]
 		mov eax, dword ptr [rax + 24h]
 		shl eax, 3
@@ -115,34 +84,28 @@ EXTERN PER_CPU_REGS: QWORD
 		add rcx, rax
 		mov rcx, qword ptr [rcx]
 
-		mov rbx, qword ptr [rcx + 8h] 
-		mov rdx, qword ptr [rcx + 18h]
-		mov rsi, qword ptr [rcx + 20h]
-		mov rdi, qword ptr [rcx + 28h]
-		mov rbp, qword ptr [rcx + 38h]
-		mov r8 , qword ptr [rcx + 40h]
-		mov r9 , qword ptr [rcx + 48h]
-		mov r10, qword ptr [rcx + 50h]
-		mov r11, qword ptr [rcx + 58h]
-		mov r12, qword ptr [rcx + 60h]
-		mov r13, qword ptr [rcx + 68h]
-		mov r14, qword ptr [rcx + 70h]
-		mov r15, qword ptr [rcx + 78h]
-		mov rax, qword ptr [rcx + 80h]
-		mov cr0, rax
-		mov rax, qword ptr [rcx + 88h]
-		mov cr3, rax
-		mov rax, qword ptr [rcx + 90h]
-		mov cr4, rax
-		
-		mov rax, qword ptr [rcx + 98h]
-		push rax
-		popfq
+		mov qword ptr [rcx], rsp
 
-		mov rax, qword ptr [rcx + 0h]
-		mov rsp, qword ptr [rcx + 30h]
-		mov rcx, qword ptr [rcx + 10h]
-		
+		vmlaunch
+		mov ecx, 4400h
+		vmread rcx, rcx
+		or ecx, 0CCDD0000h
+		call bugCheck
+	__vsm__vmlaunchSaveRegisters ENDP
+
+	__vsm__guestEntry PROC
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h]
+		shl eax, 3
+		mov rcx, PER_CPU_REGS
+		add rcx, rax
+		mov rcx, qword ptr [rcx]
+
+		mov rsp, qword ptr [rcx]
+		pop rcx
+		pop rax
+		add rsp, 38h
+
 		ret
 	__vsm__guestEntry ENDP
 
@@ -259,6 +222,42 @@ EXTERN PER_CPU_REGS: QWORD
 		ret
 	__vsm__getIDTlimit ENDP
 
+	__vsm__readGdtr PROC ;__vsm__readGdtr(ULONG_PTR pGdtrSpace)
+		sub rsp, 68h
+
+		sgdt qword ptr [rcx]
+
+		add rsp, 68h
+		ret
+	__vsm__readGdtr ENDP
+
+	__vsm__writeGdtr PROC ;__vsm__writeGdtr(ULONG_PTR pGdtrSpace)
+		sub rsp, 68h
+
+		lgdt fword ptr [rcx]
+
+		add rsp, 68h
+		ret
+	__vsm__writeGdtr ENDP
+
+	__vsm__readIdtr PROC ;__vsm__readGdtr(ULONG_PTR pGdtrSpace)
+		sub rsp, 68h
+
+		sidt qword ptr [rcx]
+
+		add rsp, 68h
+		ret
+	__vsm__readIdtr ENDP
+
+	__vsm__writeIdtr PROC ;__vsm__writeGdtr(ULONG_PTR pGdtrSpace)
+		sub rsp, 68h
+
+		lidt fword ptr [rcx]
+
+		add rsp, 68h
+		ret
+	__vsm__writeIdtr ENDP
+
 	__vsm__NOP PROC
 		nop
 		nop
@@ -354,7 +353,7 @@ EXTERN PER_CPU_REGS: QWORD
 		push r12
 		push r13
 		push r14
-		push r15
+		push r15 ;x8h
 		mov ecx, GUEST_RIP_INDEX
 		vmread rcx, rcx
 		push rcx		
@@ -366,27 +365,42 @@ EXTERN PER_CPU_REGS: QWORD
 		push rcx
 		mov ecx, VM_INSTRUCTION_LENGTH_INDEX
 		vmread rcx, rcx
-		push rcx
+		push rcx ;x8h
 
 		mov rbp, rsp
-		mov r11, 68h
-		sub rsp, r11
 
-		;确保x86模式的兼容性，提前进行fs段寄存器深赋值
+		;save x87fpu, SSE, AVX states
+		sub rsp, 248h ;x0h
+		fxsave qword ptr [rsp] ;至少需要200h(= 512)字节的空间
+		sub rsp, 60h
+		
+		;check whether x86 software(by fs register)
+		mov ecx, GUEST_FS_BASE_INDEX
+		vmread rcx, rcx
+		cmp rcx, 0
+	jz  NO_NEED_RESET_FS
 		mov ax, fs
 		mov fs, ax
+NO_NEED_RESET_FS:
 
 		call VM_EXIT_HANDLER
 
+		;restore guest Rip pointer
 		mov rcx, qword ptr [rbp + 0h]
 		mov rax, qword ptr [rbp + 18h]
 		add rax, rcx
 		mov ecx, GUEST_RIP_INDEX
 		vmwrite rcx, rax
+		
+		;restore guest x87fpu, SSE, AVX states
+		add rsp, 60h ;x0h
+		fxrstor qword ptr [rsp]
+		add rsp, 248h ;x0h		
 
-		mov rsp, rbp
+		;skip vmx-related fields
 		add rsp, 20h
 
+		;restore general purpose registers
 		pop r15
 		pop r14
 		pop r13
@@ -403,6 +417,7 @@ EXTERN PER_CPU_REGS: QWORD
 		pop rbx
 		pop rax
 
+		;resume guest
 		vmresume
 	__vsm__hostEntry ENDP
 
@@ -417,9 +432,10 @@ EXTERN PER_CPU_REGS: QWORD
 	jz  REASON_RDMSR
 		cmp word ptr [rbp + 8h], 32
 	jz  REASON_WRMSR
-
-		mov rcx, 66668888h
+		mov rcx, qword ptr [rbp + 8h] ;VM_EXIT_REASON
+		or rcx, 0ABCD0000h
 		call bugCheck
+
 REASON_CPUID:
 		call CPUID_EXIT
 	jmp RETURN
@@ -431,13 +447,15 @@ REASON_RDMSR:
 	jmp RETURN
 REASON_WRMSR:
 		call WRMSR_EXIT
+	jmp RETURN
+
 RETURN:
 		add rsp, 48h
 		ret
 	VM_EXIT_HANDLER ENDP
 
 	CPUID_EXIT PROC
-		sub rsp, 48h
+		sub rsp, 68h
 		mov rax, qword ptr [rbp + 90h]
 		mov rcx, qword ptr [rbp + 80h]
 		cpuid
@@ -445,37 +463,43 @@ RETURN:
 		mov qword ptr [rbp + 88h], rbx
 		mov qword ptr [rbp + 80h], rcx
 		mov qword ptr [rbp + 78h], rdx
-		add rsp, 48h
+		add rsp, 68h
 		ret
 	CPUID_EXIT ENDP
 
 	RDMSR_EXIT PROC
-		sub rsp, 48h
+		sub rsp, 68h
 		mov rcx, qword ptr [rbp + 80h]
 		rdmsr
 		mov qword ptr [rbp + 90h], rax
 		mov qword ptr [rbp + 78h], rdx
-		add rsp, 48h
+		add rsp, 68h
 		ret
 	RDMSR_EXIT ENDP
 
 	WRMSR_EXIT PROC
-		sub rsp, 48h
+		sub rsp, 68h
 		mov rax, qword ptr [rbp + 90h]
 		mov rcx, qword ptr [rbp + 80h]
 		mov rdx, qword ptr [rbp + 78h]
 		wrmsr
-		add rsp, 48h
+		add rsp, 68h
 		ret
 	WRMSR_EXIT ENDP
-
+	
 	VMCALL_EXIT PROC
-		sub rsp, 48h
+		sub rsp, 68h
+
 		mov rax, qword ptr [rbp + 10h]
 		push rax
 		popfq
 
 		mov rsp, rbp
+
+		sub rsp, 248h
+		fxrstor qword ptr [rsp]  ;至少需要200h字节的空间
+		add rsp, 248h	
+
 		add rsp, 20h
 
 		pop r15
@@ -488,17 +512,33 @@ RETURN:
 		pop r8
 		pop rbp
 		pop rdi
-		pop rsi
+		pop rsi 
 		pop rdx
 		pop rcx
 		pop rbx
-		pop rax
-				
+
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+		pop qword ptr [rax + 100h]		
+		
 		mov eax, GUEST_RSP_INDEX
 		vmread rsp, rax
 
+		mov rax, gs: [20h]
+		mov eax, dword ptr [rax + 24h] ;cpu index
+		shl eax, 3
+		add rax, PER_CPU_REGS
+
+		vmclear qword ptr [rax + 500h]
+
+		mov rax, qword ptr [rax + 100h]
+
 		vmxoff
-		ret ;注意此时的rsp == GUEST_RSP, ret指令返回到的是GUEST.
+		ret
 	VMCALL_EXIT ENDP
+
+;一般情况下不会用到的VT-x功能-----------------------------------------------------------------------------------------------------------------------------------------
 
 END
