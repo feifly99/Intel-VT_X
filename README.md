@@ -6,6 +6,16 @@
     本项目旨在填补这一空白，完全基于 Intel SDM 自主从零实现，目标是构建一个“能在现代多核硬件上运行、足够干净、容易学习的真实VMM”。
     如果你也在苦苦寻找一个能跑得起来、能看得懂、能调得动的虚拟化项目，希望本仓库能给你一点帮助。
 
+    VT-X Minimal中，作了如下更新：
+    1.手动保存恢复x87FPU/AVX/SSE状态；
+    2.在VT卸载后，修复GDT/IDT的Limit段限制(0x57ui16 & 0xFFFui16)
+
+    另外，VT的HOST_ENTRY中不要保存CRX & DRX寄存器：
+    1.CR3.mov to CR3会导致缓存不一致；
+    2.CR4.mov to CR4的某些位需要用INVVPID去刷新。
+    3.就算保存了，最后还是通过GUEST的区域由硬件CPU恢复。
+    通过VMWRITE写入的CR3和直接mov to CR3机制不同，前者不会导致缓存不一致！
+
     Minimal和EPT文件夹下新增了两个vt_plus.asm，是之前vt.asm的简化整合版！
     之前的vt.asm中，所有的逻辑都在__vsm__hostEntry中，十分臃肿难读
     新加入的plus版本在原来的基础上做了大幅度的重构和逻辑删减，保持逻辑功能正常的情况下简化文件尺寸
