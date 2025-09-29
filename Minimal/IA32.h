@@ -1,10 +1,11 @@
-﻿#ifndef __INTEL_IA32_BASIC_INDEX__
+#ifndef __INTEL_IA32_BASIC_INDEX__
 #define __INTEL_IA32_BASIC_INDEX__
 
 #include "base.h"
 
-#define EACH_CPU_REGS_COUNT 21
+#define VMLAUNCH_SPACE_NEEDED (PAGE_SIZE)
 
+extern ULONG64 __vsm__getRAX();
 extern ULONG64 __vsm__trap();
 extern ULONG64 __vsm__vmcall();
 extern VOID __vsm__CLI();
@@ -16,6 +17,7 @@ extern VOID __vsm__vmlaunchSaveRegisters();
 extern VOID __vsm__vmxoffSaveRegisters();
 extern ULONG64 __vasm__isVMXOperationsSupported();
 extern ULONG64 __vasm__setCR4VMXEBit();
+extern ULONG64 __vasm__clearCR4VMXEBit();
 extern ULONG64 __vsm__getCR4();
 extern VOID __vsm__restoreCR4();
 extern ULONG64 __vsm__getDR7();
@@ -31,6 +33,10 @@ extern ULONG64 __vsm__getGDTbase();
 extern ULONG __vsm__getGDTlimit();
 extern ULONG64 __vsm__getIDTbase();
 extern ULONG __vsm__getIDTlimit();
+extern VOID __vsm__readGdtr(ULONG_PTR pGdtrSpace);
+extern VOID __vsm__writeGdtr(ULONG_PTR pGdtrSpace);
+extern VOID __vsm__readIdtr(ULONG_PTR pIdtrSpace);
+extern VOID __vsm__writeIdtr(ULONG_PTR pIdtrSpace);
 extern ULONG64 __vsm__vmLaunch();
 extern ULONG64 __vsm__guestEntry();
 extern ULONG64 __vsm__hostEntry();
@@ -90,7 +96,7 @@ typedef struct _VIRTUAL_CPU_STRUCT
 	PVOID virtualHostStack;
 	SIZE_T virtualHostStackSize;
 	PVOID virtualHostStackBottom;
-	ULONG64 regs[EACH_CPU_REGS_COUNT];
+	UCHAR regs[VMLAUNCH_SPACE_NEEDED];
 }VCPU, *PVCPU;
 
 typedef enum _IA32_INDEXES
