@@ -393,9 +393,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	bugCheck = (ULONG_PTR)KeBugCheckEx;
 	driverObject->DriverUnload = driverUnload;
 
-	targetRip = 0x7FF69F46137F;
+	targetRip = 0x7FF69F46137F; //R3 虚拟地址.
 
-	ULONG pid = 6552;
+	ULONG pid = 6552; //R3 PID.
 	KAPC_STATE apc = { 0 };
 	PEPROCESS pe = NULL;
 	PsLookupProcessByProcessId((HANDLE)pid, &pe);
@@ -406,7 +406,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	KeUnstackDetachProcess(&apc);
 	ObDereferenceObject(pe);
 
-	ULONG_PTR targetRipPhysicalAddress = getPhysicalAddressByCR3AndVirtualAddress(targetProcessCr3, targetRip);
+	ULONG_PTR targetRipPhysicalAddress = getPhysicalAddressByCR3AndVirtualAddress(targetProcessCr3, targetRip); //拿到R3 进程需要监控的地址的物理地址.
 
 	totalCpuCount = KeQueryActiveProcessorCount(NULL);
 	PER_CPU_REGS = (ULONG_PTR*)ExAllocatePool2(POOL_FLAG_NON_PAGED, totalCpuCount * sizeof(ULONG_PTR), 'zzaa');
@@ -466,7 +466,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	tpPT	= pPT;
 	
 	ULONG_PTR realPhyAdd = targetRipPhysicalAddress;
-	realPhyAddAligned = realPhyAdd & ~0xFFFull;
+	realPhyAddAligned = realPhyAdd & ~0xFFFull; //4KB对齐目标物理页面.
 
 	*(ULONG_PTR*)pPML4T = pPDPT;
 	for (size_t i = 0; i < PDTpages; i++)
@@ -487,7 +487,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 		((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x7 | ((ULONG64)cacheType << 3);
 		if (phyPageAddress == realPhyAddAligned)
 		{
-			((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x3 | ((ULONG64)cacheType << 3);
+			((ULONG_PTR*)pPT)[pteIndex] = phyPageAddress | 0x3 | ((ULONG64)cacheType << 3); //修改为可读写不可执行触发EPT VIOLATION.
 			pPte = (ULONG_PTR)((ULONG_PTR*)pPT + pteIndex);
 		}
 	}
@@ -507,4 +507,5 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT driverObject, PUNICODE_STRING regPath)
 	KeIpiGenericCall(virtualization, 0);
 
 	return STATUS_SUCCESS;
+
 }
