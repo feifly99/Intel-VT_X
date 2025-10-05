@@ -380,7 +380,7 @@ EXTERN printRcx: QWORD
 
 		;save x87fpu, SSE, AVX states
 		sub rsp, 248h ;x0h
-		fxsave qword ptr [rsp] ;������Ҫ200h(= 512)�ֽڵĿռ�
+		fxsave qword ptr [rsp] ;至少需要200h(= 512)字节的空间
 		sub rsp, 60h
 		
 		;check whether x86 software(by fs register)
@@ -523,8 +523,10 @@ RETURN:
 		mov r9, gs: [20h]
 		lea rax, MTF_C_HANDLER
 		call rax
+
 		cmp eax, 0
-	jz	NOT_MATCH_TARGET_RIP
+	jz	NOT_MATCH_TARGET_RIP ;如果返回0说明没对应到目标Rip，直接返回.
+		;返回非0(1)：取消MTF监控，恢复正常CPU状态：
 		mov ecx, VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS_INDEX
 		mov eax, 84006172h
 		vmwrite rcx, rax ;close Monitor Trap Flag
@@ -542,7 +544,7 @@ NOT_MATCH_TARGET_RIP:
 		mov rax, realPhyAddAligned
 		or  rax, 37h				
 		mov rcx, pPte
-		mov qword ptr [rcx], rax	;�ָ�RWX��д��PTE
+		mov qword ptr [rcx], rax	;恢复RWX并写回PTE.
 
 		sub rsp, 20h
 		mov qword ptr [rsp + 0h], 0
@@ -551,11 +553,11 @@ NOT_MATCH_TARGET_RIP:
 		mov qword ptr [rsp + 0h], rax
 		mov rax, 2
 		invept rax, oword ptr [rsp + 0h]
-		add rsp, 20h				;ˢ��EPT����
+		add rsp, 20h				;刷新EPT缓存.
 
 		mov ecx, VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS_INDEX
 		mov eax, 8C006172h
-		vmwrite rcx, rax		;����Monitor Trap Flag
+		vmwrite rcx, rax		;启动Monitor Trap Flag.开始逐个指令Walk这个物理页面.
 
 		add rsp, 68h
 		ret
@@ -579,7 +581,7 @@ NOT_MATCH_TARGET_RIP:
 		mov rsp, rbp
 
 		sub rsp, 248h
-		fxrstor qword ptr [rsp]  ;������Ҫ200h�ֽڵĿռ�
+		fxrstor qword ptr [rsp]  ;至少需要200h字节的空间
 		add rsp, 248h	
 
 		add rsp, 20h
@@ -628,6 +630,7 @@ NOT_MATCH_TARGET_RIP:
 		ret
 	VMCALL_EXIT ENDP
 
-;һ������²����õ���VT-x����-----------------------------------------------------------------------------------------------------------------------------------------
+;一般情况下不会用到的VT-x功能-----------------------------------------------------------------------------------------------------------------------------------------
+
 
 END
