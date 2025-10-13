@@ -1,4 +1,4 @@
-﻿#include "IA32.h"
+#include "IA32.h"
 
 #pragma warning(disable: 28182)
 #pragma warning(disable: 6387)
@@ -235,6 +235,9 @@ VOID EPT_VIOLATION_C_HANDLER(
 	ULONG_PTR faultPhysicalAddress = 0;
 	__vmx_vmread(VEIF_GUEST_PHYSICAL_ADDRESS, &faultPhysicalAddress);
 
+	ULONG_PTR faultLinerlAddress = 0;
+	__vmx_vmread(VEIF_GUEST_LINER_ADDRESS, &faultLinerlAddress);
+
 	fixPte(pRipPte, targetRipPhysicalAddress & ~0xFFFull, RWX);
 
 	if (faultPhysicalAddress == targetRipPhysicalAddress)
@@ -258,8 +261,11 @@ VOID EPT_VIOLATION_C_HANDLER(
 			ULONG_PTR _rcx_physical = getPhysicalAddressByCR3AndVirtualAddress(_cr3, _rcx);
 			SIZE_T pteIndex = phyAddress2PteIndex(_rcx_physical);
 			fixPte(tpPT + pteIndex * sizeof(PVOID), _rcx_physical & ~0xFFFull, RWX);
-			DbgPrint("0x%llX, 0x%llX\n", _rcx_physical, faultPhysicalAddress);
-			startMonitorTrapFlag();
+			DbgPrint("[+]triggeredTimes: %zu, linerAddress: 0x%llX, physicalAddress: 0x%llX, guestPhysicalAddress: 0x%llX\n", triggeredTimes, faultLinerlAddress, _rcx_physical, faultPhysicalAddress);
+			if (++triggeredTimes <= 100)
+			{
+				startMonitorTrapFlag();
+			}
 		}
 	}
 
