@@ -114,8 +114,8 @@ VOID fixPte(ULONG_PTR pPte, ULONG_PTR physicalAddressAligned, ULONG mode)
 	{
 	case RW:
 		*(ULONG_PTR*)pPte = physicalAddressAligned | 0x3ull | ((ULONG64)getPhysicalMemoryCacheType(physicalAddressAligned) << 3);
-		break;												 
-	case X:													 
+		break;
+	case X:
 		*(ULONG_PTR*)pPte = physicalAddressAligned | 0x4ull | ((ULONG64)getPhysicalMemoryCacheType(physicalAddressAligned) << 3);
 		break;
 	case RWX:
@@ -130,13 +130,13 @@ VOID fixPte(ULONG_PTR pPte, ULONG_PTR physicalAddressAligned, ULONG mode)
 
 SIZE_T phyAddress2PteIndex(
 	ULONG_PTR phyPageAddressAligned
-) 
+)
 {
 	phyPageAddressAligned &= ~0xFFFull;
 
-	size_t BIT_20_12 = (phyPageAddressAligned >> 12) & 0x1FF; 
-	size_t BIT_29_21 = (phyPageAddressAligned >> 21) & 0x1FF; 
-	size_t BIT_38_30 = (phyPageAddressAligned >> 30) & 0x1FF; 
+	size_t BIT_20_12 = (phyPageAddressAligned >> 12) & 0x1FF;
+	size_t BIT_29_21 = (phyPageAddressAligned >> 21) & 0x1FF;
+	size_t BIT_38_30 = (phyPageAddressAligned >> 30) & 0x1FF;
 
 	size_t pteIndex = BIT_38_30 * 0x40000 + BIT_29_21 * 0x200 + BIT_20_12;
 
@@ -214,14 +214,14 @@ VOID MTF_C_HANDLER(
 	UNREFERENCED_PARAMETER(_cr3);
 	UNREFERENCED_PARAMETER(_kprcb);
 
-	*(ULONG_PTR*)pRipPte = realPhyAddAligned | 0x3ull | ((ULONG64)oCacheType << 3);
+	fixPte(pRipPte, targetRipPhysicalAddress & ~0xFFFull, RW);
 	closeMonitorTrapFlag();
 
 	return;
 }
 
 VOID EPT_VIOLATION_C_HANDLER(
-	ULONG_PTR _rbp,
+	ULONG_PTR _rbp,	
 	ULONG_PTR _rip,
 	ULONG_PTR _cr3,
 	ULONG_PTR _kprcb
@@ -238,34 +238,51 @@ VOID EPT_VIOLATION_C_HANDLER(
 	ULONG_PTR faultLinerlAddress = 0;
 	__vmx_vmread(VEIF_GUEST_LINER_ADDRESS, &faultLinerlAddress);
 
-	fixPte(pRipPte, targetRipPhysicalAddress & ~0xFFFull, RWX);
+	ULONG_PTR exitQualification = 0;
+	__vmx_vmread(VEIF_EXIT_QUALIFICATION, &exitQualification);
 
-	if (faultPhysicalAddress == targetRipPhysicalAddress)
+	if ((exitQualification & 0x4ull))
 	{
-		ULONG_PTR _rcx = *(ULONG_PTR*)(_rbp + 0x80);
-		ULONG_PTR _rcx_physical = getPhysicalAddressByCR3AndVirtualAddress(_cr3, _rcx);
-		SIZE_T pteIndex = phyAddress2PteIndex(_rcx_physical);
-		fixPte(tpPT + pteIndex * sizeof(PVOID) , _rcx_physical & ~0xFFFull, X);
-		uIsTrigeredByCriticalRip[KeGetCurrentProcessorNumber()] = 1;
+		fixPte(pRipPte, targetRipPhysicalAddress & ~0xFFFull, RWX);
+		if (faultPhysicalAddress == targetRipPhysicalAddress)
+		{
+			for (SIZE_T j = 0; j < 15; j++)
+			{
+				ULONG_PTR _reg = *(ULONG_PTR*)(_rbp + 0x90 - j * sizeof(ULONG64));
+				ULONG_PTR _reg_physical = getPhysicalAddressByCR3AndVirtualAddress(_cr3, _reg);
+				SIZE_T pteIndexReg = phyAddress2PteIndex(_reg_physical);
+				fixPte(tpPT + pteIndexReg * sizeof(PVOID), _reg_physical & ~0xFFFull, X);
+			}
+		}
+		else
+		{
+			startMonitorTrapFlag();
+		}
 	}
 	else
 	{
-		if (uIsTrigeredByCriticalRip[KeGetCurrentProcessorNumber()] == 0)
+		if (_rip == targetRipLinerAddress)
 		{
+			for (SIZE_T j = 0; j < 15; j++)
+			{
+				ULONG_PTR _reg = *(ULONG_PTR*)(_rbp + 0x90 - j * sizeof(PVOID));
+				ULONG_PTR _reg_physical = getPhysicalAddressByCR3AndVirtualAddress(_cr3, _reg);
+				SIZE_T pteIndexReg = phyAddress2PteIndex(_reg_physical);
+				fixPte(tpPT + pteIndexReg * sizeof(PVOID), _reg_physical & ~0xFFFull, RWX);
+			}
+			if (exitQualification & 0x2ull)
+			{
+				DbgPrint("位于地址0x%llX处的指令写入了地址0x%llX\n", _rip, faultLinerlAddress);
+			}
+			if (exitQualification & 0x1ull)
+			{
+				DbgPrint("位于地址0x%llX处的指令读取了地址0x%llX\n", _rip, faultLinerlAddress);
+			}
 			startMonitorTrapFlag();
 		}
 		else
 		{
-			uIsTrigeredByCriticalRip[KeGetCurrentProcessorNumber()] = 0;
-			ULONG_PTR _rcx = *(ULONG_PTR*)(_rbp + 0x80);
-			ULONG_PTR _rcx_physical = getPhysicalAddressByCR3AndVirtualAddress(_cr3, _rcx);
-			SIZE_T pteIndex = phyAddress2PteIndex(_rcx_physical);
-			fixPte(tpPT + pteIndex * sizeof(PVOID), _rcx_physical & ~0xFFFull, RWX);
-			DbgPrint("[+]triggeredTimes: %zu, linerAddress: 0x%llX, physicalAddress: 0x%llX, guestPhysicalAddress: 0x%llX\n", triggeredTimes, faultLinerlAddress, _rcx_physical, faultPhysicalAddress);
-			if (++triggeredTimes <= 100)
-			{
-				startMonitorTrapFlag();
-			}
+			DbgPrint("在临界区间隔内，位于地址0x%llX处的指令访问了地址0x%llX\n", _rip, faultLinerlAddress);
 		}
 	}
 
@@ -521,9 +538,9 @@ NTSTATUS DriverEntry(
 
 	triggeredTimes = 0;
 
-	targetRipLinerAddress = 0x7FF7905D1890;
+	targetRipLinerAddress = 0x10002F25D;
 
-	pid = 7648;
+	pid = 7488;
 	KAPC_STATE apc = { 0 };
 	PEPROCESS pe = NULL;
 	PsLookupProcessByProcessId((HANDLE)pid, &pe);
