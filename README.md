@@ -1,5 +1,12 @@
 # Intel-VT_X
 
+    Minimal: 仅支持最基础，最简单的VT-x环境，没有任何拓展，是最最简单的入门文件夹；
+    EPT：    在VT-x的基础上，增加了EPT特性，并测试了对NtOpenProcess的EPT劫持；
+    Extension：结合Intel® VT 和 EPT/ MTF特性的，没有用户层交互的，调试器功能demo集合；
+    UserKrnlInteraction： 结合结合Intel® VT 和 EPT/ MTF特性的，配备用户层交互的，调试器功能集成版，支持动态拓展和数据结构管理，稍加改动就可以直接真正实用的版本。
+
+    以上四个文件夹，Minimal和EPT已经开发完毕，不会再次更改；Extension和UserKrnlInteraction都正在处于开发状态。作者QQ: 1906106581.
+
     为什么我要写这个项目？
     当前可公开获取的 VT-x 学习资源要么是四五年前的过时代码，只支持 32 位单核系统；要么就是企业级虚拟化平台，代码庞杂复杂，难以直接学习。
     而不公开的VT资料就要花钱去买，而且很贵！
