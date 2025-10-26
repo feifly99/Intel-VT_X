@@ -15,37 +15,37 @@ PVOID g_ioRegion = NULL;
 
 VOID definePidAndIoRegion()
 {
-	printf("ÊäÈëÊ®½øÖÆ½ø³ÌID: \n");
+	printf("è¾“å…¥åè¿›åˆ¶è¿›ç¨‹ID: \n");
 	g_targetPid = 0;
 	scanf_s("%llu", &g_targetPid);
 	g_ioRegion = malloc(USN_PAGE_SIZE);
 	RtlZeroMemory(g_ioRegion, USN_PAGE_SIZE);
 	transPidAndIoRegion(g_targetPid, g_ioRegion);
-	printf("[+] Ä¿±ê½ø³ÌPid: %llu(d), IoRegion: %p\n", g_targetPid, g_ioRegion);
+	printf("[+] ç›®æ ‡è¿›ç¨‹Pid: %llu(d), IoRegion: %p\n", g_targetPid, g_ioRegion);
 	return;
 }
 
 VOID addAddressToList()
 {
-	printf("ÊäÈëÒª¼à¿ØµÄµØÖ·(Ê®Áù½øÖÆ)£º\n");
+	printf("è¾“å…¥è¦ç›‘æ§çš„åœ°å€(åå…­è¿›åˆ¶)ï¼š\n");
 	ULONG_PTR address = 0;
 	scanf_s("%llX", &address);
-	addAddressToMonitor((PVOID)address); //´¥·¢VM_EXIT
-	printf("[+] ÒÑÌí¼Ó¼à¿ØµØÖ·: %p\n", (PVOID)address);
+	addAddressToMonitor((PVOID)address); //è§¦å‘VM_EXIT
+	printf("[+] å·²æ·»åŠ ç›‘æ§åœ°å€: %p\n", (PVOID)address);
 	return;
 }
 
 VOID testMonitoring()
 {
 	startMonitoring();
-	printf("[+] ÒÑ¿ªÆô¼à¿Ø\n");
+	printf("[+] å·²å¼€å¯ç›‘æ§\n");
 	return;
 }
 
 VOID testEnding()
 {
 	stopMonitoring();
-	printf("[+] ÒÑÍ£Ö¹¼à¿Ø²¢Çå³ıËùÓĞ¼à¿ØµØÖ·\n");
+	printf("[+] å·²åœæ­¢ç›‘æ§å¹¶æ¸…é™¤æ‰€æœ‰ç›‘æ§åœ°å€\n");
 	return;	
 }
 
@@ -58,7 +58,7 @@ int main()
 	addAddressToList();
 	addAddressToList();
 	testMonitoring();
-	Sleep(10000); //¼à¿Ø10Ãë
+	Sleep(10000); //ç›‘æ§10ç§’
 	testEnding();
     return 0;
 }
