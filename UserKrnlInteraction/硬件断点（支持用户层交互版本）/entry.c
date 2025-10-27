@@ -1,4 +1,4 @@
-﻿#include "IA32.h"
+#include "IA32.h"
 
 #pragma warning(disable: 28182)
 #pragma warning(disable: 6387)
@@ -41,7 +41,7 @@ ULONG_PTR pV2P;
 
 ULONG64 targetPid;
 
-ULONG_PTR targetCr3, ioRegion;
+ULONG_PTR targetCr3, debuggerCr3, debuggerIoRegionVirtual, debuggerIoRegionPhysical;
 
 ULONG_PTR targetLinerAddress;
 
@@ -51,9 +51,13 @@ SIZE_T triggeredTimes;
 
 UCHAR oCacheType;
 
-ULONG_PTR g_faultPteIndex[12], g_physicalAddress[12];
+SIZE_T idx;
 
-BOOLEAN g_isInMonitorList[12];
+SIZE_T* g_faultPteIndex;
+
+ULONG_PTR* g_physicalAddress;
+
+BOOLEAN* g_isInMonitorList;
 
 LIST_ENTRY g_addressListHead;
 
@@ -93,6 +97,20 @@ NTSTATUS readPhysicalAddress(
 	{
 		return MmCopyMemory(receivedBuffer, Read, readSize, MM_COPY_MEMORY_PHYSICAL, bytesTransferred);
 	}
+}
+
+VOID writePhysicalMemory(
+	IN ULONG_PTR physicalAddress,
+	IN PUCHAR writeBuffer,
+	IN SIZE_T writeLenLessThan0x1000
+)
+{
+	PHYSICAL_ADDRESS p_address = { 0 };
+	p_address.QuadPart = (LONG64)physicalAddress;
+	PVOID kernelAddressMappedByPhysical = MmMapIoSpace(p_address, 0x1000, MmNonCachedUnordered);
+	RtlCopyMemory(kernelAddressMappedByPhysical, writeBuffer, writeLenLessThan0x1000);
+	MmUnmapIoSpace(kernelAddressMappedByPhysical, 0x1000);
+	return;
 }
 
 ULONG_PTR getPhysicalAddressByCR3AndVirtualAddress(
@@ -145,6 +163,7 @@ VOID addAddressToMonitorList(
 	newNode->listEntry.Blink = g_addressListHead.Blink;
 	newNode->listEntry.Flink = &g_addressListHead;
 	g_addressListHead.Blink = &newNode->listEntry;
+	writePhysicalMemory(debuggerIoRegionPhysical + (idx++) * sizeof(ULONG_PTR), (PUCHAR)&newNode->virtualAddress, sizeof(ULONG_PTR));
 	return;
 }
 
@@ -153,8 +172,10 @@ VOID removeAddressInMonitorList(
 )
 {
 	PLIST_ENTRY currentEntry = g_addressListHead.Flink;
+	LONG64 id = -1;
 	while (currentEntry != &g_addressListHead)
 	{
+		id++;
 		PMONITOR_ADDRESS_LIST currentNode = CONTAINING_RECORD(currentEntry, MONITOR_ADDRESS_LIST, listEntry);
 		if (currentNode->virtualAddress == virtualAddress)
 		{
@@ -162,10 +183,21 @@ VOID removeAddressInMonitorList(
 			currentEntry->Flink->Blink = currentEntry->Blink;
 			ExFreePool(currentNode);
 			currentNode = NULL;
-			return;
+			break;
 		}
 		currentEntry = currentEntry->Flink;
 	}
+
+	for (SIZE_T i = id; i < idx - 1; i++)
+	{
+		ULONG_PTR tempVirtualAddress = 0;
+		readPhysicalAddress((PVOID)(debuggerIoRegionPhysical + (i + 1) * sizeof(ULONG_PTR)), &tempVirtualAddress, sizeof(ULONG_PTR), NULL);
+		writePhysicalMemory(debuggerIoRegionPhysical + i * sizeof(ULONG_PTR), (PUCHAR)&tempVirtualAddress, sizeof(ULONG_PTR));
+	}
+
+	ULONG_PTR zero = 0;
+	writePhysicalMemory(debuggerIoRegionPhysical + (--idx) * sizeof(ULONG_PTR), (PUCHAR)&zero, sizeof(ULONG_PTR));
+
 	return;
 }
 
@@ -181,6 +213,10 @@ VOID freeMonitorAddressList()
 	}
 	g_addressListHead.Flink = &g_addressListHead;
 	g_addressListHead.Blink = &g_addressListHead;
+
+	UCHAR tempBuffer[PAGE_SIZE] = { 0 };
+	writePhysicalMemory(debuggerIoRegionPhysical, tempBuffer, PAGE_SIZE);
+
 	return;
 }
 
@@ -248,7 +284,6 @@ VOID fixAllAddressesPteInMonitorList(ULONG64 rights)
 		ULONG_PTR physicalAddressAligned = physicalAddress & ~0xFFFull;
 		ULONG_PTR pteIndex = getPteIndexByPhysicalAddressAligned(physicalAddressAligned);
 		fixSinglePte(tpPT + pteIndex * sizeof(ULONG_PTR), physicalAddressAligned, rights);
-		DbgPrint("---0x%llX\n", physicalAddress);
 		currentEntry = currentEntry->Flink;
 	}
 	return;
@@ -269,17 +304,13 @@ ULONG CPUID_C_HANDLER(
 	ULONG _eax = *(ULONG*)(_rbp + 0x90);
 	ULONG64 _rcx = *(ULONG64*)(_rbp + 0x80);
 	ULONG64 _rdx = *(ULONG64*)(_rbp + 0x78);
-	//DbgPrint("eax: 0x%lX\n", _eax);
-	//DbgPrint("rcx: 0x%llX\n", _rcx);
-	//DbgPrint("rdx: 0x%llX\n", _rdx);
-	//不用跳过CPUID
 	switch (_eax)
 	{
 		case 0xBCCCF000:
 		{
-			DbgPrint("[+] 目标进程pid: %llu, ioRegion: 0x%llX\n", _rcx, _rdx);
 			targetPid = _rcx;
-			ioRegion = _rdx;
+			debuggerIoRegionVirtual = _rdx;
+			debuggerCr3 = _cr3;
 			PEPROCESS pe = NULL;
 			KAPC_STATE apc = { 0 };
 			PsLookupProcessByProcessId((HANDLE)targetPid, &pe);
@@ -287,7 +318,8 @@ ULONG CPUID_C_HANDLER(
 			targetCr3 = __readcr3();
 			KeUnstackDetachProcess(&apc);
 			ObDereferenceObject(pe);
-			//DbgPrint("%llX, %llX\n", _cr3, targetCr3); 有问题，前后不一致
+			debuggerIoRegionPhysical = getPhysicalAddressByCR3AndVirtualAddress(debuggerCr3, debuggerIoRegionVirtual);
+			DbgPrint("[*] 目标进程pid: %llu, debuggerIoRegionVirtual: 0x%llX, debuggerIoRegionPhysical: 0x%llX\n", _rcx, _rdx, debuggerIoRegionPhysical);
 			return 0;
 		}
 		case 0xCCCCE000:
@@ -296,19 +328,30 @@ ULONG CPUID_C_HANDLER(
 			addAddressToMonitorList(_rcx);
 			return 0;
 		}
+		case 0xECCCD000:
+		{
+			DbgPrint("[-] 移除的监控地址: 0x%llX\n", _rcx);
+			removeAddressInMonitorList(_rcx);
+			return 0;
+		}
 		case 0xAAAAAAAA:
 		{
-			DbgPrint("[+] 准备启动监控\n");
+			DbgPrint("[!] 准备启动监控\n");
 			fixAllAddressesPteInMonitorList(X);
 			return 1;
 		}
 		case 0xBBBBBBBB:
 		{
-			DbgPrint("[+] 准备停止监控\n");
+			DbgPrint("[O] 准备停止监控\n");
 			fixAllAddressesPteInMonitorList(RWX); 
 			__vmx_vmwrite(VECF_PRIMARY_PROCESSOR_BASED_VM_EXECUTION_CONTROLS, 0x84006172ul);
-			freeMonitorAddressList();
 			return 1;
+		}
+		case 0xCEFFE000:
+		{
+			DbgPrint("[!] 清理资源，退出程序\n");
+			freeMonitorAddressList();
+			return 0;
 		}
 		default:
 		{
@@ -623,6 +666,21 @@ VOID driverUnload(
 		ExFreePool((PVOID)tpPML4T);
 		tpPML4T = 0;
 	}
+	if (g_faultPteIndex)
+	{
+		ExFreePool((PVOID)g_faultPteIndex);
+		g_faultPteIndex = NULL;
+	}
+	if (g_physicalAddress)
+	{
+		ExFreePool((PVOID)g_physicalAddress);
+		g_physicalAddress = NULL;
+	}
+	if (g_isInMonitorList)
+	{
+		ExFreePool((PVOID)g_isInMonitorList);
+		g_isInMonitorList = NULL;
+	}
 	KeSetSystemAffinityThread(1ull << 0);
 	return;
 }
@@ -643,6 +701,15 @@ NTSTATUS DriverEntry(
 
 	vCpu = (PVCPU)ExAllocatePool2(POOL_FLAG_NON_PAGED, totalCpuCount * sizeof(VCPU), 'zzaa');
 	RtlZeroMemory(vCpu, totalCpuCount * sizeof(VCPU));
+
+	g_faultPteIndex = (SIZE_T*)ExAllocatePool2(POOL_FLAG_NON_PAGED, totalCpuCount * sizeof(SIZE_T), 'zzaa');
+	RtlZeroMemory(g_faultPteIndex, totalCpuCount * sizeof(SIZE_T));
+
+	g_physicalAddress = (ULONG_PTR*)ExAllocatePool2(POOL_FLAG_NON_PAGED, totalCpuCount * sizeof(ULONG_PTR), 'zzaa');
+	RtlZeroMemory(g_physicalAddress, totalCpuCount * sizeof(ULONG_PTR));
+
+	g_isInMonitorList = (BOOLEAN*)ExAllocatePool2(POOL_FLAG_NON_PAGED, totalCpuCount * sizeof(BOOLEAN), 'zzaa');
+	RtlZeroMemory(g_isInMonitorList, totalCpuCount * sizeof(BOOLEAN));
 
 	SIZE_T regionSizeNeeded = 0x1000;
 	ULONG vmcsIdentifier = (ULONG)(__readmsr(IA32_VMX_BASIC) & ~(1ull << 31));
@@ -683,7 +750,7 @@ NTSTATUS DriverEntry(
 
 	KeSetSystemAffinityThread(1ull << 0);
 
-	SIZE_T PDTpages = 32;
+	SIZE_T PDTpages = 512;
 
 	ULONG_PTR pPML4T = allocatePages(1);
 	ULONG_PTR pPDPT = allocatePages(1);
