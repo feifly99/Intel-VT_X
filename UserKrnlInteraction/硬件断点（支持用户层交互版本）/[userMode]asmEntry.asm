@@ -30,4 +30,10 @@ stopMonitoring PROC
 	ret
 stopMonitoring ENDP
 
+clearResourceAndExit PROC
+	mov eax, 0CEFFE000h
+	cpuid
+	ret
+clearResourceAndExit ENDP
+
 END
